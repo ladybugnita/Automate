@@ -1,6 +1,6 @@
 import express from "express";
-import http, { globalAgent } from "http";
-import { WebSocketServer } from "ws";
+import http from "http";
+import { WebSocketServer, WebSocket } from "ws";
 import dotenv from "dotenv";
 import path from "path";
 import jwt from "jsonwebtoken";
@@ -14,58 +14,19 @@ const PORT = 8081;
 const app = express();
 const server = http.createServer(app);
 
-const agentWss = new WebSocketServer({ server, path: "/socket" });
-const adminWss = new WebSocketServer({ port: 8082, path: "/ws/admin" });
+const wss = new WebSocketServer({ server, path: "/socket" });
 
-console.log("Agent WS:", `ws://localhost:${PORT}/socket`);
-console.log("Admin WS:", `ws://localhost:8082/ws/admin`);
+console.log("WebSocket Server:", `ws://localhost:${PORT}/socket`);
 
-const agentClients = new Map();
-
-const heartbeat = (ws) => {
-  ws.isAlive = true;
-  ws.on("pong", () => ws.isAlive = true);
-};
-
- setInterval(async () => {
-    for (const [username, ws] of agentClients.entries()) {
-        if (!ws.isAlive) {
-            ws.terminate();
-            agentClients.delete(username);
-            
-            try {
-            await db.query(
-                "UPDATE agents SET status='disconnected', updatedAt=NOW() WHERE username=?",
-                [username]
-            );
-
-            notifyAdmin({
-                type: "AGENT_STATUS_CHANGED",
-                username,
-                status: "disconnected"
-            });
-        } catch (err) {
-            console.error("Error updating agent status:", err);
-        }
-
-            continue;
-        }
-        ws.isAlive = false;
-        ws.ping();
-    }
-}, 30000);
-
-function notifyAdmin(msg) {
-    adminWss.clients.forEach(client => {
-        if (client.readyState === client.OPEN) {
-            client.send(JSON.stringify(msg));
-        }
-    });
-}
+const agentConnections = new Map();
+const frontendConnections = new Map();
+const pendingCommands = new Map();
+const pendingResponses = new Map();
+const failedCommands = new Map();
 
 function authenticateToken(token) {
     try {
-        const payload =jwt.verify(token, SECRET);
+        const payload = jwt.verify(token, SECRET);
         return {
             id: payload.id,
             username: payload.username,
@@ -76,153 +37,393 @@ function authenticateToken(token) {
     }
 }
 
-async function authenticateViaURL(ws, req){
+function processSupervisorResponse(data, username) {
+    let command = 'unknown';
+    let resultData = null;
+
+    if (data.response && typeof data.response === 'object') {
+        if (data.response.command) {
+            command = data.response.command;
+            resultData = data.response.result;
+        }
+        else if (data.response.error) {
+            command = 'unknown';
+            resultData = { status: 'error', message: data.response.error };
+        }
+    }
+    else if (data.command) {
+        command = data.command;
+        resultData = data.result || data.response;
+    }
+    else if (data.error) {
+        command = 'unknown';
+        resultData = { status: 'error', message: data.error };
+    }
+
+    if (typeof resultData === 'string') {
+        try {
+            resultData = JSON.parse(resultData);
+            console.log(`Parsed result data for ${command}:`, resultData);
+        } catch (parseError) {
+            console.log(`Failed to parse result as JSON, keeping as string`);
+        }
+    }
+
+    console.log(`Processing response for: ${command}`, resultData);
+
+    const frontendConn = frontendConnections.get(username);
+    const responseMessage = {
+        type: 'COMMAND_RESPONSE',
+        command: command,
+        data: resultData,
+        timestamp: new Date().toISOString(),
+        source: 'backend'
+    };
+
+    if (frontendConn && frontendConn.readyState === WebSocket.OPEN) {
+        frontendConn.send(JSON.stringify(responseMessage));
+        console.log(`Response forwarded to frontend from backend: ${command}`);
+    } else {
+        console.log(`No frontend connection - storing backend response`);
+        if (!pendingResponses.has(username)) {
+            pendingResponses.set(username, []);
+        }
+        pendingResponses.get(username).push(responseMessage);
+    }
+}
+
+wss.on("connection", async (ws, req) => {
+    console.log("New connection attempt...");
+
     try {
-        const url = new URL (req.url, `http://${req.headers.host}`);
+        const url = new URL(req.url, `http://${req.headers.host}`);
         const token = url.searchParams.get("token");
 
         if (!token) {
             console.log("No token provided");
             ws.send(JSON.stringify({ status: "error", message: "No token provided" }));
             ws.close();
-            return false;
+            return;
         }
 
         const user = authenticateToken(token);
-        if(!user){
+        if (!user) {
             console.log("Invalid token");
             ws.send(JSON.stringify({ status: "error", message: "Invalid token" }));
             ws.close();
-            return false;
+            return;
         }
 
-        
         ws.user = user;
         ws.authenticated = true;
+        ws.connectionType = null;
 
-        await db.query(
-            `INSERT INTO agents (token, username, status)
-             VALUES (?, ?, 'connected')
-             ON DUPLICATE KEY UPDATE status='connected', updatedAt=NOW()`,
-            [token, user.username]
-        );
-
-        agentClients.set(user.username, ws);
+        console.log(`Client connected: ${user.username} (awaiting classification)`);
 
         ws.send(JSON.stringify({
             type: "TOKEN_CONFIRMED",
             username: user.username,
-            message: "WebSocket Auth Successful"
+            message: "WebSocket Connection Successful"
         }));
 
-        notifyAdmin({
-            type: "AGENT_STATUS_CHANGED",
-            username: user.username,
-            status: "connected"
+        ws.on("message", async (raw) => {
+            if (!ws.authenticated) return;
+
+            try {
+                const message = raw.toString();
+                console.log(`[MESSAGE from ${user.username}]: ${message}`);
+
+                const data = JSON.parse(message);
+
+                if (data.response && !ws.connectionType) {
+                    console.log(`AUTO-DETECTED BACKEND (via response field): ${user.username}`);
+                    agentConnections.set(user.username, ws);
+                    ws.connectionType = 'agent';
+
+                    const frontendConn = frontendConnections.get(user.username);
+                    if (frontendConn && frontendConn.readyState === WebSocket.OPEN) {
+                        frontendConn.send(JSON.stringify({
+                            type: 'AGENT_CONNECTED',
+                            message: 'backend is now connected and ready'
+                        }));
+                    }
+
+                    console.log(`backend auto-detected: ${user.username}`);
+
+                    console.log(`Processing initial response:`, data.response);
+
+                    processResponse(data, user.username);
+                    return;
+                }
+
+                if (data.action === "register" && !ws.connectionType) {
+                    console.log(`BACKEND REGISTERED: ${user.username}`);
+                    agentConnections.set(user.username, ws);
+                    ws.connectionType = 'agent';
+
+                    if (failedCommands.has(user.username)) {
+                        const commandsToRetry = failedCommands.get(user.username);
+                        console.log(`Retrying ${commandsToRetry.length} failed commands for ${user.username}`);
+
+                        commandsToRetry.forEach(commandObj => {
+                            if (ws.readyState === WebSocket.OPEN) {
+                                ws.send(JSON.stringify(commandObj));
+                                console.log(`Retried command: ${commandObj.command}`);
+                            }
+                        });
+
+                        failedCommands.delete(user.username);
+                    }
+
+                    const frontendConn = frontendConnections.get(user.username);
+                    if (frontendConn && frontendConn.readyState === WebSocket.OPEN) {
+                        frontendConn.send(JSON.stringify({
+                            type: 'AGENT_CONNECTED',
+                            message: 'backend is now connected and ready'
+                        }));
+                    }
+
+                    ws.send(JSON.stringify({
+                        action: "register_ack",
+                        status: "success",
+                        message: "Successfully registered as backend"
+                    }));
+
+                    console.log(`backend registered: ${user.username}`);
+                    return;
+                }
+
+                if ((data.action === "response" || data.response) && ws.connectionType === 'agent') {
+                    console.log(`Response from Backend:`, data);
+                    processResponse(data, user.username);
+                    return;
+                }
+
+                if (data.command && !ws.connectionType) {
+                    console.log(`Identified as FRONTEND: ${user.username}`);
+                    ws.connectionType = 'frontend';
+                    frontendConnections.set(user.username, ws);
+
+                    if (pendingResponses.has(user.username)) {
+                        const responses = pendingResponses.get(user.username);
+                        console.log(`Sending ${responses.length} pending responses to frontend`);
+                        responses.forEach(response => {
+                            if (ws.readyState === WebSocket.OPEN) {
+                                ws.send(JSON.stringify(response));
+                            }
+                        });
+                        pendingResponses.delete(user.username);
+                    }
+                }
+
+                if (data.command && ws.connectionType === 'frontend') {
+                    const agentConnection = agentConnections.get(user.username);
+
+                    const commandMessage = {
+                        command: data.command
+                    };
+
+                    if (data.payload) {
+                        commandMessage.payload = data.payload;
+                    }
+
+                    if (agentConnection && agentConnection.readyState === WebSocket.OPEN) {
+                        console.log(`Forwarding command to Backend: ${data.command}`, data.payload ? `with payload: ${JSON.stringify(data.payload)}` : '');
+
+                        agentConnection.send(JSON.stringify(commandMessage));
+                        console.log(`Command sent to Backend: ${data.command}`);
+
+                    } else {
+                        console.log(`No backend connection - storing command for retry`);
+
+                        if (!failedCommands.has(user.username)) {
+                            failedCommands.set(user.username, []);
+                        }
+                        failedCommands.get(user.username).push(commandMessage);
+
+                        ws.send(JSON.stringify({
+                            type: 'WAITING_FOR_BACKEND',
+                            command: data.command,
+                            message: 'backend is not connected. Command will be retried when backend reconnects.',
+                            timestamp: new Date().toISOString()
+                        }));
+                    }
+                    return;
+                }
+
+                if (!ws.connectionType) {
+                    console.log(`Unknown message format from unclassified connection:`, data);
+                }
+
+            } catch (err) {
+                console.error("Error processing message:", err);
+                if (ws.connectionType === 'frontend') {
+                    ws.send(JSON.stringify({
+                        type: 'ERROR',
+                        message: 'Failed to process message'
+                    }));
+                }
+            }
         });
-        console.log("Agent connected:", user.username);
-        return true;
 
-    } catch (err) {
-       console.log("URL auth error:", err.message);
-       ws.send(JSON.stringify({ status: "error", message:"Auth failed" }));
-       ws.close();
-        return false;
-    }
-}
-
-agentWss.on("connection", async (ws, req) => {
-    console.log("Agent attemtpting to connect...");
-    heartbeat(ws);
-
-    const ok = await authenticateViaURL(ws, req);
-    if(!ok) return ;
-
-    ws.on("message", async (raw) => {
-         if (!ws.authenticated) return;
-        try {
-        const data = JSON.parse(raw);
-
-        if (data.type === "COMMAND") {
-            const result = `Executed: ${data.command}`;
-            ws.send(JSON.stringify({ type: "COMMAND_RESULT", result }));
-            notifyAdmin({
-                type: "COMMAND_RESULT",
-                username: ws.user.username,
-                result,
-            });
-        }
-    } catch (err) {
-        console.error("Error processing message:", err);
-    }
-    });
-
-    ws.on("close", async () => {
-        if (!ws.authenticated) return; 
+        ws.on("close", async () => {
+            if (!ws.authenticated) return;
 
             const username = ws.user.username;
-            agentClients.delete(username);
+            const connectionType = ws.connectionType;
 
-            try{
-            await db.query(
-                "UPDATE agents SET status='disconnected', updatedAt=NOW() WHERE username=?",
-                [username]
-            );
+            if (connectionType === 'agent' && agentConnections.get(username) === ws) {
+                agentConnections.delete(username);
+                console.log(`BACKEND disconnected: ${username}`);
 
-            notifyAdmin({
-                type: "AGENT_STATUS_CHANGED",
-                username,
-                status: "disconnected"
-            });
-
-            console.log("Agent disconnected:", username);     
-    } catch (err) {
-        console.error("Error updating agent status on disconnect:", err);
-    }
-    });
-
-    ws.on("error", (error) => {
-        console.error("Websocket error:", error);
-    });
-});
-
-adminWss.on("connection", async (ws) => {
-    console.log("Admin connected");
-    
-    try{
-    const [rows] = await db.query(
-        "SELECT username, status, updatedAt AS last_seen FROM agents"
-    );
-
-    ws.send(JSON.stringify({ type: "AGENT_LIST", agents: rows }));
-} catch (err){
-    console.error("Error fetching agents:", err);
-    ws.send(JSON.stringify({ type: "AGENT_LIST", agents: [] }));
-}
-
-    ws.on("message", (msg) => {
-        try{
-        const payload = JSON.parse(msg);
-
-        if (payload.type === "SEND_COMMAND") {
-            const target = agentClients.get(payload.username);
-
-            if (target && target.readyState === target.OPEN) {
-                target.send(JSON.stringify({
-                    type: "COMMAND",
-                    command: payload.command
-                }));
+                const frontendConn = frontendConnections.get(username);
+                if (frontendConn && frontendConn.readyState === WebSocket.OPEN) {
+                    frontendConn.send(JSON.stringify({
+                        type: 'AGENT_DISCONNECTED',
+                        message: 'backend disconnected'
+                    }));
+                }
             }
-        }
+            if (connectionType === 'frontend' && frontendConnections.get(username) === ws) {
+                frontendConnections.delete(username);
+                console.log(`Frontend disconnected: ${username}`);
+            }
+
+            try {
+                await db.query(
+                    "UPDATE agents SET status='disconnected', updatedAt=NOW() WHERE username=?",
+                    [username]
+                );
+            } catch (err) {
+                console.error("Error updating agent status:", err);
+            }
+        });
+
+        ws.on("error", (error) => {
+            console.error("WebSocket error:", error);
+        });
+
     } catch (err) {
-        console.error ("Error processing admin message:", err);
+        console.log("Connection error:", err.message);
+        ws.close();
     }
-    });
-    ws.on("error", (error) => {
-        console.error("Admin WebSocke error:", error);
+});
+
+app.use(express.json());
+
+app.post("/api/send-command", async (req, res) => {
+    try {
+        const { username, command, payload } = req.body;
+
+        if (!username || !command) {
+            return res.status(400).json({ error: "Username and command are required" });
+        }
+
+        console.log(`HTTP Command from frontend: ${command} for user: ${username}`);
+
+        const agentConnection = agentConnections.get(username);
+
+        const commandMessage = {
+            command: command
+        };
+
+        if (payload) {
+            commandMessage.payload = payload;
+        }
+
+        if (agentConnection && agentConnection.readyState === WebSocket.OPEN) {
+            console.log(`Forwarding HTTP command to BACKEND: ${command}`, payload ? `with payload: ${JSON.stringify(payload)}` : '');
+
+            agentConnection.send(JSON.stringify(commandMessage));
+
+            return res.json({
+                success: true,
+                message: `Command '${command}' sent to backend`,
+                note: 'Response will come via WebSocket connection'
+            });
+        }
+
+        return res.status(404).json({
+            success: false,
+            error: "backend not connected",
+            message: "Please ensure the backend application is running and connected to the WebSocket server"
+        });
+
+    } catch (error) {
+        console.error("Error in send-command endpoint:", error);
+        res.status(500).json({
+            success: false,
+            error: "Internal server error"
+        });
+    }
+});
+
+app.get("/api/agent-status", async (req, res) => {
+    try {
+        const token = req.query.token;
+
+        if (!token) {
+            return res.json({ status: 'error', message: 'Token missing' });
+        }
+
+        const user = authenticateToken(token);
+        if (!user) {
+            return res.json({ status: 'invalid', message: 'Invalid token' });
+        }
+
+        const agentConnection = agentConnections.get(user.username);
+        if (agentConnection && agentConnection.readyState === WebSocket.OPEN) {
+            res.json({
+                status: 'connected',
+                username: user.username,
+                message: 'backend is connected and ready'
+            });
+        } else {
+            res.json({
+                status: 'disconnected',
+                username: user.username,
+                message: 'backend is not connected'
+            });
+        }
+    } catch (error) {
+        console.error('Error checking agent status:', error);
+        res.json({
+            status: 'error',
+            message: 'Failed to check agent status'
+        });
+    }
+});
+
+app.get("/api/connection-status", (req, res) => {
+    const agentUsernames = Array.from(agentConnections.keys());
+    const frontendUsernames = Array.from(frontendConnections.keys());
+
+    res.json({
+        agentConnections: agentUsernames,
+        frontendConnections: frontendUsernames,
+        totalAgents: agentUsernames.length,
+        totalFrontends: frontendUsernames.length
     });
 });
+
+setInterval(() => {
+    const now = Date.now();
+    for (const [username, responses] of pendingResponses.entries()) {
+        const filtered = responses.filter(resp => now - new Date(resp.timestamp).getTime() < 30000);
+        if (filtered.length === 0) {
+            pendingResponses.delete(username);
+        } else if (filtered.length !== responses.length) {
+            pendingResponses.set(username, filtered);
+        }
+    }
+
+    for (const [username, commands] of failedCommands.entries()) {
+        if (commands.length > 10) {
+            failedCommands.set(username, commands.slice(-10));
+        }
+    }
+}, 60000);
 
 server.listen(PORT, () => {
-    console.log("HTTP + WS Server running on port:", PORT);
+    console.log(`WebSocket server running on port: ${PORT}`);
 });

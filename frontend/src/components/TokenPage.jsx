@@ -1,153 +1,199 @@
-import React, { useState } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
+import { useWebSocket } from "../Context/WebSocketContext";
 
 export default function TokenPage() {
-    const token = localStorage.getItem("token");
+    const navigate = useNavigate();
+    const { isConnected, startConnection, reconnect } = useWebSocket();
+
+    const [tokenInput, setTokenInput] = useState(localStorage.getItem("token") || "");
     const [status, setStatus] = useState("");
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState("");
     const [username, setUsername] = useState("");
-    const navigate = useNavigate();
+    const [tokenConfirmed, setTokenConfirmed] = useState(false);
+
+    const connectionAttemptedRef = useRef(false);
+    const navigationAttemptedRef = useRef(false);
 
     const checkTokenStatus = async () => {
-        if(!token) {
-            setError ("No token found.");
+        console.log('Starting token check...');
+
+        if (!tokenInput || tokenInput.length < 10) {
+            setError("Please enter a valid token.");
             return;
         }
 
+        localStorage.setItem("token", tokenInput);
         setLoading(true);
         setError("");
         setStatus("");
         setUsername("");
+        setTokenConfirmed(false);
 
-        try{
-            const res = await fetch(
-                `http://localhost:5000/check-agent-status?token=${encodedURIComponent(token)}`);
+        connectionAttemptedRef.current = false;
+        navigationAttemptedRef.current = false;
 
-                if(!res.ok){
-                    throw new Error(`HTTP error! status: ${res.status}`);
-                }
-
-                const data = await res.json();
-                console.log("Token check response:", data);
-
-            if (data.status === "connected") {
-                setStatus("Connected");
-                setUsername(data.username || "");
-            }  else if (data.status === "invalid") {
-                setStatus("invalid");
-            } else {
-             await checkTokenViaDatabase();
-            }
-        } catch (err) {
-            console.error("TWebSocket token check failed, trying database check:", err);
-            await checkTokenViaDatabase();
-        }
-        setLoading(false);
-        };
-
-         const checkTokenViaDatabase = async () => {
         try {
+            console.log('Calling check-agent-status API...');
             const res = await fetch(
-                `http://localhost:5000/validate-token?token=${encodeURIComponent(token)}`
+                `http://localhost:5000/check-agent-status?token=${encodeURIComponent(tokenInput)}`
             );
 
-            if (!res.ok) {
-                throw new Error(`HTTP error! status: ${res.status}`);
-            }
+            if (!res.ok) throw new Error("Failed to contact backend.");
 
             const data = await res.json();
-            console.log("Database token check response:", data);
+            console.log("Token check response:", data);
 
-            if (data.valid && data.status === "connected") {
+            if (data.status === "connected") {
+                console.log('Token status: CONNECTED');
                 setStatus("connected");
                 setUsername(data.username || "");
-            } else if (data.valid) {
+                setTokenConfirmed(true);
+            } else if (data.status === "invalid") {
+                console.log('Token status: INVALID');
+                setStatus("invalid");
+            } else {
+                console.log('Falling back to database check');
+                await fallbackCheckDatabase();
+            }
+        } catch (err) {
+            console.error('API call failed:', err);
+            await fallbackCheckDatabase();
+        }
+
+        setLoading(false);
+    };
+
+    const fallbackCheckDatabase = async () => {
+        try {
+            console.log('Calling validate-token API...');
+            const res = await fetch(
+                `http://localhost:5000/validate-token?token=${encodeURIComponent(tokenInput)}`
+            );
+            const data = await res.json();
+            console.log("Validate token response:", data);
+
+            if (data.valid) {
+                console.log('Token validated via database');
                 setStatus("valid-but-disconnected");
-                setError("Token is valid but agent is not connected");
                 setUsername(data.username || "");
-                 } else {
+                setTokenConfirmed(true);
+            } else {
+                console.log('Token invalid in database');
                 setStatus("invalid");
             }
         } catch (err) {
-            console.error("Database token check error:", err);
+            console.error('Database check failed:', err);
             setStatus("invalid");
-            setError("Failed to check token status via both methods");
+            setError("Could not validate token");
         }
     };
 
-        const goToDashboard = () => {
-            navigate("/dashboard");
+    useEffect(() => {
+        console.log('Connection useEffect - tokenConfirmed:', tokenConfirmed, 'isConnected:', isConnected, 'attempted:', connectionAttemptedRef.current);
+
+        if (tokenConfirmed && !isConnected && !connectionAttemptedRef.current) {
+            console.log('Starting WebSocket connection manually...');
+            connectionAttemptedRef.current = true;
+            startConnection();
+        }
+    }, [tokenConfirmed, isConnected, startConnection]);
+
+
+    useEffect(() => {
+        console.log('Navigation useEffect - isConnected:', isConnected, 'status:', status, 'navigationAttempted:', navigationAttemptedRef.current);
+
+        if (isConnected && (status === "connected" || status === "valid-but-disconnected") && !navigationAttemptedRef.current) {
+            console.log('WebSocket connected and ready!');
+            setStatus("fully-ready");
+
+            const timer = setTimeout(() => {
+                console.log('Auto-navigating to dashboard...');
+                navigationAttemptedRef.current = true;
+                navigate("/dashboard");
+            }, 1000);
+
+            return () => clearTimeout(timer);
+        }
+    }, [isConnected, status, navigate]);
+
+    const goToDashboard = () => {
+        console.log('Manual navigation to dashboard...');
+        navigationAttemptedRef.current = true;
+        navigate("/dashboard");
     };
 
     return (
-        <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-gray-900 via-blue-900 to-slate-800">
-            <div className="bg-white/10 backdrop-blur-lg p-10 rounded-2xl shadow-2xl w-[450px] border border-white/20 text-center text-white">
-                
-                <h1 className="text-2xl font-semibold mb-6">Authentication Token</h1>
+        <div className="min-h-screen bg-white flex items-center justify-center">
+            <div className="absolute top-0 left-0 right-0 bg-green-800 h-2"></div>
 
-                <div className="bg-black/30 rounded-xl p-4 border border-white/10 mb-6">
-                    <p className="break-words text-sm text-gray-200">
-                        <strong>Token:</strong> {token || "No token found"}
-                    </p>
-                </div>
+            <div className="bg-white p-8 rounded-2xl w-96 shadow-xl border-t-4 border-green-600 mt-16">
+                <h2 className="text-3xl font-bold text-green-700 text-center mb-6">
+                    Authentication Token
+                </h2>
 
+                {error && (
+                    <div className="mb-4 bg-red-50 border border-red-200 text-red-600 px-4 py-3 rounded-lg text-center text-sm">
+                        {error}
+                    </div>
+                )}
+
+                <label className="block text-sm font-medium text-green-800 mb-2">Token</label>
                 <input
-                    value={token}
-                    onChange={(e) => setToken(e.target.value)}
+                    value={tokenInput}
+                    onChange={(e) => setTokenInput(e.target.value)}
                     placeholder="Paste token here"
-                    className="w-full px-4 py-3 rounded-lg bg-white/20 border border-gray-400 text-white placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 transition mb-4"
+                    className="w-full px-4 py-3 rounded-lg border border-gray-300"
                 />
 
                 <button
                     onClick={checkTokenStatus}
                     disabled={loading}
-                    className="w-full bg-blue-600 hover:bg-blue-700 text-white py-3 rounded-lg font-semibold transition shadow-md"
+                    className="mt-4 w-full bg-green-600 hover:bg-green-700 text-white py-3 rounded-lg"
                 >
-                    {loading ? "Checking..." : "Check Token Status"}
+                    {loading ? "Checking..." : "Check Status"}
                 </button>
 
-                {error && (
-                    <div className="mt-4 text-red-400 font-semibold">
-                        {error}
-                        </div>
+                {status === "invalid" && (
+                    <p className="mt-4 text-red-600 text-center font-semibold">
+                        Invalid Token
+                    </p>
                 )}
 
-                  {status === "valid-but-disconnected" && (
-                    <div className="mt-6 text-yellow-400 font-semibold">
-                        Token is valid but agent is not connected to WebSocket
-                        {username && <p className="text-sm mt-2">Username: {username}</p>}
-                        <br />
-                        <button
-                            onClick={checkTokenStatus}
-                            className="mt-4 w-full bg-yellow-600 hover:bg-yellow-700 text-white py-3 rounded-lg font-semibold transition"
-                        >
-                            Check Again
-                        </button>
+                {tokenConfirmed && !isConnected && (
+                    <div className="mt-4 bg-yellow-50 border border-yellow-200 p-3 rounded-lg text-center">
+                        <p className="text-yellow-700 text-sm">Token valid - Connecting WebSocket...</p>
                     </div>
                 )}
 
-                {status === "connected" && (
-                    <div className="mt-6 text-green-400">
-                        Agent connected successfully!
-                     {username && <p className="text-sm mt-2">Username: {username}</p>}
+                {isConnected && !status.includes("fully-ready") && (
+                    <div className="mt-4 bg-blue-50 border border-blue-200 p-3 rounded-lg text-center">
+                        <p className="text-blue-700 text-sm">WebSocket connected - Finalizing...</p>
+                    </div>
+                )}
 
-                        <br />
+                {status === "fully-ready" && (
+                    <div className="mt-6 bg-green-50 border border-green-200 p-4 rounded-lg text-center">
+                        <p className="font-semibold text-green-700">Token Valid & WebSocket Connected!</p>
+                        {username && <p className="text-sm mt-1">User: {username}</p>}
+                        <p className="text-xs text-green-600 mt-1">Ready to proceed</p>
 
                         <button
                             onClick={goToDashboard}
-                            className="mt-4 w-full bg-green-600 hover:bg-green-700 text-white py-3 rounded-lg font-semibold transition"
+                            className="mt-3 w-full bg-green-600 hover:bg-green-700 text-white py-2 rounded-lg"
                         >
                             Continue to Dashboard
                         </button>
                     </div>
                 )}
 
-                {status === "invalid" && (
-                    <div className="mt-6 text-red-400 font-semibold">
-                         Token not validated
-                    </div>
-                )}
+                <div className="mt-4 text-xs text-gray-500 text-center space-y-1">
+                    <p>Token Confirmed: {tokenConfirmed ? "Confirmed" : "notConfirmed"}</p>
+                    <p>WebSocket: {isConnected ? "Connected" : "Disconnected"}</p>
+                    <p>Status: {status || "none"}</p>
+                    <p>Username: {username || "none"}</p>
+                </div>
             </div>
         </div>
     );

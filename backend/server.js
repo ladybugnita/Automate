@@ -15,6 +15,46 @@ app.use(express.json());
 
 app.use("/api", authRoutes);
 
+const persistentConnections = new Map();
+
+app.post("/api/send-command", async (req, res) => {
+    try {
+        const { username, command, payload } = req.body;
+
+        if (!username || !command) {
+            return res.status(400).json({ error: "Username and command are required" });
+        }
+
+        console.log(`Forwarding command to WebSocket server: ${command} for user: ${username}`);
+
+        const response = await fetch('http://localhost:8081/api/send-command', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                username: username,
+                command: command,
+                payload: payload
+            })
+        });
+
+        if (!response.ok) {
+            throw new Error(`WebSocket server responded with status: ${response.status}`);
+        }
+
+        const result = await response.json();
+        res.json(result);
+
+    } catch (error) {
+        console.error("Error forwarding command:", error);
+        res.status(500).json({
+            error: "Internal server error",
+            details: error.message
+        });
+    }
+});
+
 app.get("/check-agent-status", async (req, res) => {
     const token = req.query.token;
 
@@ -25,7 +65,7 @@ app.get("/check-agent-status", async (req, res) => {
     let responded = false;
     let connectionTimeout;
     let responseTimeout;
-    let ws; 
+    let ws;
 
     const safeRespond = (data) => {
         if (!responded) {
@@ -33,17 +73,17 @@ app.get("/check-agent-status", async (req, res) => {
             clearTimeout(connectionTimeout);
             clearTimeout(responseTimeout);
             res.json(data);
-            try { 
-                if (ws) ws.close(); 
-            } catch (err) {
-                console.error("Error closing WebSocket:", err);
+
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                console.log("Closing temporary WebSocket connection used for status check");
+                ws.close(1000, "Status check complete");
             }
         }
     };
 
     try {
         ws = new WebSocket(`ws://localhost:8081/socket?token=${encodeURIComponent(token)}`);
-        
+
         connectionTimeout = setTimeout(() => {
             if (!responded) {
                 safeRespond({ status: "timeout", message: "Connection timeout" });
@@ -98,6 +138,37 @@ app.get("/check-agent-status", async (req, res) => {
     }
 });
 
+app.get("/api/agent-status", async (req, res) => {
+    const token = req.query.token;
+
+    if (!token) {
+        return res.json({ status: "error", message: "Token missing" });
+    }
+
+    try {
+        const response = await fetch('http://localhost:8081/api/agent-status', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ token })
+        });
+
+        if (response.ok) {
+            const result = await response.json();
+            res.json(result);
+
+        } else {
+            res.json({ status: "disconnected", message: "Agent not connected" });
+        }
+
+    } catch (error) {
+        console.error("Error checking agent status:", error);
+        res.json({ status: "error", message: "Failed to check agent status" });
+    }
+});
+
+
 import jwt from "jsonwebtoken";
 
 const JWT_SECRET = process.env.JWT_SECRET || "secretkey123";
@@ -111,35 +182,43 @@ app.get("/validate-token", async (req, res) => {
 
     try {
         const decoded = jwt.verify(token, JWT_SECRET);
-        
+
         const [rows] = await db.query(
             "SELECT username, status FROM agents WHERE username = ? AND status = 'connected'",
             [decoded.username]
         );
 
         if (rows.length > 0) {
-            return res.json({ 
-                valid: true, 
-                status: "connected", 
-                username: decoded.username 
+            return res.json({
+                valid: true,
+                status: "connected",
+                username: decoded.username
             });
         } else {
-            return res.json({ 
-                valid: true, 
-                status: "disconnected", 
+            return res.json({
+                valid: true,
+                status: "disconnected",
                 username: decoded.username,
-                message: "Token valid but agent not connected" 
+                message: "Token valid but agent not connected"
             });
         }
 
     } catch (err) {
         console.error("Token validation error:", err.message);
-        return res.json({ 
-            valid: false, 
-            status: "invalid", 
-            message: "Invalid token" 
+        return res.json({
+            valid: false,
+            status: "invalid",
+            message: "Invalid token"
         });
     }
+});
+
+app.get("/health", (req, res) => {
+    res.json({
+        status: "ok",
+        message: "Backend server is running",
+        timestamp: new Date().toISOString()
+    });
 });
 
 app.listen(5000, () => {
