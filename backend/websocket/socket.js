@@ -37,7 +37,7 @@ function authenticateToken(token) {
     }
 }
 
-function processSupervisorResponse(data, username) {
+function processResponse(data, username) {
     let command = 'unknown';
     let resultData = null;
 
