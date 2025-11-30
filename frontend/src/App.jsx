@@ -5,6 +5,7 @@ import TokenPage from "./components/TokenPage";
 import Dashboard from "./components/Dashboard/Dashboard";
 import LoginPage from "./components/LoginPage";
 import Users from "./components/Users/Users";
+import EventViewer from "./components/EventViewer/EventViewer";
 import WebSocketProvider from "./context/WebSocketContext";
 import Layout from "./components/Layout/Layout";
 
@@ -29,6 +30,7 @@ function App() {
           <Route path="/" element={<LoginPage />} />
           <Route path="/signup" element={<SignupPage />} />
           <Route path="/token" element={<TokenPage />} />
+
           <Route path="/dashboard" element={
             <ProtectedRoute>
               <SidebarLayout>
@@ -44,16 +46,16 @@ function App() {
             </ProtectedRoute>
           } />
           <Route path="/ad-dns" element={
-            <protectedRoute>
+            <ProtectedRoute>
               <SidebarLayout>
                 <div>AD DNS page - Coming Soon</div>
               </SidebarLayout>
-            </protectedRoute>
+            </ProtectedRoute>
           } />
           <Route path="/event-viewer" element={
             <ProtectedRoute>
               <SidebarLayout>
-                <div>Event Viewer Page - Coming Soon</div>
+                <EventViewer />
               </SidebarLayout>
             </ProtectedRoute>
           } />
@@ -95,7 +97,7 @@ function App() {
           } />
 
           <Route path="/device-backup" element={
-            <ProtectedRoute>
+              <ProtectedRoute>
               <SidebarLayout>
                 <div> Device Backup Page - Coming Soon</div>
               </SidebarLayout>
