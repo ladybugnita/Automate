@@ -5,6 +5,7 @@
 :root {
   --primary-color: #166534;
   --primary-light: #dcfce7;
+  --primary-lighter: #f0fdf4; 
   --primary-dark: #14532d;
 
   --secondary-blue: #3b82f6;
@@ -52,7 +53,7 @@
 
   --border-radius-sm: 0.25rem;
   --border-radius: 0.5rem;
-  --border-radius-lg: 0.75rem;
+  --border-radius-lg: 0.75rem; 
   --border-radius-xl: 1rem;
 
   --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
@@ -89,6 +90,10 @@ body {
 
 .bg-primary-light {
   background-color: var(--primary-light);
+}
+
+.bg-primary-lighter {
+  background-color: var(--primary-lighter);
 }
 
 .text-success {

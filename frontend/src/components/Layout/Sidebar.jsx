@@ -34,7 +34,6 @@ const Sidebar = ({ onItemClick }) => {
   return (
     <div className="sidebar">
       <div className="sidebar-header">
-        <h2 className="sidebar-title">Automation</h2>
       </div>
 
       <nav className="sidebar-nav">

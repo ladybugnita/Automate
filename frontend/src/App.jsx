@@ -8,6 +8,7 @@ import Users from "./components/Users/Users";
 import EventViewer from "./components/EventViewer/EventViewer";
 import WebSocketProvider from "./context/WebSocketContext";
 import Layout from "./components/Layout/Layout";
+import ResourceMonitor from "./components/ResourceMonitor/ResourceMonitor";
 
 const ProtectedRoute = ({ children }) => {
   const token = localStorage.getItem("token");
@@ -70,7 +71,7 @@ function App() {
           <Route path="/resource-monitor" element={
             <ProtectedRoute>
               <SidebarLayout>
-                <div>Resource Monitor Page - Coming Soon</div>
+                <ResourceMonitor />
               </SidebarLayout>
             </ProtectedRoute>
           } />
