@@ -9,6 +9,8 @@ import EventViewer from "./components/EventViewer/EventViewer";
 import WebSocketProvider from "./context/WebSocketContext";
 import Layout from "./components/Layout/Layout";
 import ResourceMonitor from "./components/ResourceMonitor/ResourceMonitor";
+import DNSConfiguration from "./components/DNSConfiguration/DNSConfiguration";
+import Routing from "./components/Routing/Routing";
 
 const ProtectedRoute = ({ children }) => {
   const token = localStorage.getItem("token");
@@ -46,10 +48,10 @@ function App() {
               </SidebarLayout>
             </ProtectedRoute>
           } />
-          <Route path="/ad-dns" element={
+          <Route path="/dnsconfiguration" element={
             <ProtectedRoute>
               <SidebarLayout>
-                <div>AD DNS page - Coming Soon</div>
+                <DNSConfiguration />
               </SidebarLayout>
             </ProtectedRoute>
           } />
@@ -105,10 +107,10 @@ function App() {
             </ProtectedRoute>
           } />
 
-          <Route path="/commands" element={
+          <Route path="/routing" element={
             <ProtectedRoute>
               <SidebarLayout>
-                <div>Commands Page - Coming Soon</div>
+                <Routing />
               </SidebarLayout>
             </ProtectedRoute>
           } />

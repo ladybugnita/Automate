@@ -52,9 +52,9 @@ const EventViewer = () => {
     const timeoutRef = useRef(null);
 
     const navItems = [
-        'Dashboard', 'AD DNS', 'Event Viewer', 'Backups', 'Users', 
+        'Dashboard', 'DNS Configuration', 'Event Viewer', 'Backups', 'Users', 
         'Resource Monitor', 'WDS', 'Networking', 'Device Auto Config', 
-        'Device Backup', 'Commands'
+        'Device Backup', 'Routing'
     ];
 
     useEffect(() => {

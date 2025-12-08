@@ -8,7 +8,7 @@ const Sidebar = ({ onItemClick }) => {
 
   const menuItems = [
     { id: 'dashboard', label: 'Dashboard', path: '/dashboard' },
-    { id: 'ad-dns', label: 'AD DNS', path: '/ad-dns' },
+    { id: 'DNS Configuration', label: 'DNS Configuration', path: '/dnsconfiguration' },
     { id: 'event-viewer', label: 'Event Viewer', path: '/event-viewer' },
     { id: 'backups', label: 'Backups', path: '/backups' },
     { id: 'users', label: 'Users', path: '/users' },
@@ -17,7 +17,7 @@ const Sidebar = ({ onItemClick }) => {
     { id: 'networking', label: 'Networking', path: '/networking' },
     { id: 'device-auto-config', label: 'Device Auto Config', path: '/device-auto-config' },
     { id: 'device-backup', label: 'Device Backup', path: '/device-backup' },
-    { id: 'commands', label: 'Commands', path: '/commands' }
+    { id: 'routing', label: 'Routing', path: '/routing' }
   ];
 
   const isActive = (path) => {
