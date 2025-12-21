@@ -11,6 +11,7 @@ import Layout from "./components/Layout/Layout";
 import ResourceMonitor from "./components/ResourceMonitor/ResourceMonitor";
 import DNSConfiguration from "./components/DNSConfiguration/DNSConfiguration";
 import Routing from "./components/Routing/Routing";
+import DHCP from "./components/DHCP/DHCP";
 
 const ProtectedRoute = ({ children }) => {
   const token = localStorage.getItem("token");
@@ -63,10 +64,10 @@ function App() {
             </ProtectedRoute>
           } />
 
-          <Route path="/backups" element={
+          <Route path="/dhcp" element={
             <ProtectedRoute>
               <SidebarLayout>
-                <div>Backups Page - Coming Soon</div>
+                <DHCP />
               </SidebarLayout>
             </ProtectedRoute>
           } />

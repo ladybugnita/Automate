@@ -10,7 +10,7 @@ const Sidebar = ({ onItemClick }) => {
     { id: 'dashboard', label: 'Dashboard', path: '/dashboard' },
     { id: 'DNS Configuration', label: 'DNS Configuration', path: '/dnsconfiguration' },
     { id: 'event-viewer', label: 'Event Viewer', path: '/event-viewer' },
-    { id: 'backups', label: 'Backups', path: '/backups' },
+    { id: 'dhcp', label: 'DHCP', path: '/dhcp' },
     { id: 'users', label: 'Users', path: '/users' },
     { id: 'resource-monitor', label: 'Resource Monitor', path: '/resource-monitor' },
     { id: 'wds', label: 'WDS', path: '/wds' },
