@@ -12,6 +12,7 @@ import ResourceMonitor from "./components/ResourceMonitor/ResourceMonitor";
 import DNSConfiguration from "./components/DNSConfiguration/DNSConfiguration";
 import Routing from "./components/Routing/Routing";
 import DHCP from "./components/DHCP/DHCP";
+import ActiveDirectory from "./components/ActiveDirectory/ActiveDirectory";
 
 const ProtectedRoute = ({ children }) => {
   const token = localStorage.getItem("token");
@@ -100,10 +101,10 @@ function App() {
             </ProtectedRoute>
           } />
 
-          <Route path="/device-backup" element={
+          <Route path="/active-directory" element={
               <ProtectedRoute>
               <SidebarLayout>
-                <div> Device Backup Page - Coming Soon</div>
+                <ActiveDirectory />
               </SidebarLayout>
             </ProtectedRoute>
           } />

@@ -15,14 +15,17 @@ const WebSocketProvider = ({ children }) => {
   const [isConnected, setIsConnected] = useState(false);
   const [lastMessage, setLastMessage] = useState(null);
   const [commandResponses, setCommandResponses] = useState({});
-  const [responseCallbacks, setResponseCallbacks] = useState({});
   const [reconnectAttempts, setReconnectAttempts] = useState(0);
   const [shouldAutoConnect, setShouldAutoConnect] = useState(true);
   const [agentStatus, setAgentStatus] = useState('checking');
   const [username, setUsername] = useState(null);
+  
   const listeners = useRef(new Set());
   const reconnectTimeoutRef = useRef(null);
   const isConnectingRef = useRef(false);
+  const messageQueue = useRef([]); 
+  const pendingRequests = useRef(new Map()); 
+  const requestCounter = useRef(0); 
 
   const maxReconnectAttempts = 10;
 
@@ -82,6 +85,36 @@ const WebSocketProvider = ({ children }) => {
     }
   }, [reconnectAttempts, shouldAutoConnect]);
 
+  const flushMessageQueue = useCallback(() => {
+    if (messageQueue.current.length > 0 && ws.current && ws.current.readyState === WebSocket.OPEN) {
+      console.log(`Flushing ${messageQueue.current.length} queued messages`);
+      
+      const queueCopy = [...messageQueue.current];
+      messageQueue.current = [];
+      
+      queueCopy.forEach(item => {
+        try {
+          ws.current.send(JSON.stringify(item.commandData));
+          console.log('Sent queued message:', item.commandData.command);
+          
+          if (item.resolve || item.reject) {
+            const requestId = item.requestId || `${item.commandData.command}_${Date.now()}`;
+            pendingRequests.current.set(requestId, {
+              command: item.commandData.command,
+              resolve: item.resolve,
+              reject: item.reject,
+              timestamp: Date.now(),
+              sentViaQueue: true
+            });
+          }
+        } catch (error) {
+          console.error('Error sending queued message:', error);
+          messageQueue.current.push(item);
+        }
+      });
+    }
+  }, []);
+
   const connectWebSocket = useCallback(async () => {
     if (isConnectingRef.current) {
       console.log('Connection already in progress, skipping...');
@@ -136,6 +169,8 @@ const WebSocketProvider = ({ children }) => {
         setAgentStatus('connected');
         setReconnectAttempts(0);
         isConnectingRef.current = false;
+        
+        flushMessageQueue();
       };
 
       ws.current.onmessage = (event) => {
@@ -163,17 +198,33 @@ const WebSocketProvider = ({ children }) => {
               rawResponse: data
             };
 
+            const responseKey = `${command}_${Date.now()}`;
+            
             setCommandResponses(prev => ({
               ...prev,
+              [responseKey]: responseWithTimestamp,
               [command]: responseWithTimestamp
             }));
+
+            const now = Date.now();
+            pendingRequests.current.forEach((request, requestId) => {
+              if (request.command === command) {
+                if (now - request.timestamp < 30000) {
+                  if (request.resolve) {
+                    request.resolve(responseWithTimestamp);
+                  }
+                  pendingRequests.current.delete(requestId);
+                }
+              }
+            });
 
             listeners.current.forEach(listener => {
               try {
                 listener({
                   action: 'response',
                   command: command,
-                  result: data.data
+                  result: data.data,
+                  responseKey: responseKey
                 });
               } catch (error) {
                 console.error('Error in WebSocket listener:', error);
@@ -183,14 +234,30 @@ const WebSocketProvider = ({ children }) => {
 
           if (data.type === 'ERROR') {
             console.error('WebSocket error:', data.message);
+            const command = data.command || 'unknown';
+            const errorKey = `error_${Date.now()}`;
+            
+            const errorResponse = {
+              message: data.message,
+              command: command,
+              timestamp: Date.now(),
+              error: true
+            };
+
             setCommandResponses(prev => ({
               ...prev,
-              error: {
-                message: data.message,
-                command: data.command,
-                timestamp: Date.now()
-              }
+              [errorKey]: errorResponse,
+              error: errorResponse
             }));
+
+            pendingRequests.current.forEach((request, requestId) => {
+              if (request.command === command) {
+                if (request.reject) {
+                  request.reject(new Error(data.message));
+                }
+                pendingRequests.current.delete(requestId);
+              }
+            });
           }
 
         } catch (parseError) {
@@ -230,12 +297,106 @@ const WebSocketProvider = ({ children }) => {
         scheduleReconnect();
       }
     }
-  }, [isValidToken, reconnectAttempts, scheduleReconnect, shouldAutoConnect]);
+  }, [isValidToken, reconnectAttempts, scheduleReconnect, shouldAutoConnect, flushMessageQueue]);
+
+  const sendCommandAsync = useCallback((command, payload = null, options = {}) => {
+    return new Promise((resolve, reject) => {
+      const requestId = `${command}_${requestCounter.current++}_${Date.now()}`;
+      const timeout = options.timeout || 30000; 
+      
+      const timeoutId = setTimeout(() => {
+        if (pendingRequests.current.has(requestId)) {
+          pendingRequests.current.delete(requestId);
+          reject(new Error(`Command timeout: ${command}`));
+        }
+      }, timeout);
+
+      const commandData = {
+        command: command
+      };
+
+      if (payload) {
+        commandData.payload = payload;
+      }
+
+      console.log(`Sending command: ${command}`, payload ? `with payload: ${JSON.stringify(payload)}` : '');
+
+      pendingRequests.current.set(requestId, {
+        command: command,
+        resolve: (data) => {
+          clearTimeout(timeoutId);
+          resolve(data);
+        },
+        reject: (error) => {
+          clearTimeout(timeoutId);
+          reject(error);
+        },
+        timestamp: Date.now()
+      });
+
+      if (isConnected && ws.current && ws.current.readyState === WebSocket.OPEN) {
+        try {
+          ws.current.send(JSON.stringify(commandData));
+          console.log(`Command sent via WebSocket: ${command}`);
+        } catch (error) {
+          console.error('Error sending via WebSocket:', error);
+          pendingRequests.current.delete(requestId);
+          clearTimeout(timeoutId);
+          
+          sendCommandViaHTTP(command, payload)
+            .then(httpResult => {
+              if (httpResult) {
+                resolve({
+                  ...httpResult,
+                  viaHttp: true
+                });
+              } else {
+                reject(error);
+              }
+            })
+            .catch(httpError => {
+              reject(new Error(`WebSocket and HTTP both failed: ${httpError.message}`));
+            });
+        }
+      } else {
+        console.log('WebSocket not connected, queuing command');
+        messageQueue.current.push({
+          commandData,
+          requestId,
+          resolve: (data) => {
+            clearTimeout(timeoutId);
+            resolve(data);
+          },
+          reject: (error) => {
+            clearTimeout(timeoutId);
+            reject(error);
+          }
+        });
+        
+        sendCommandViaHTTP(command, payload)
+          .then(httpResult => {
+            if (httpResult && httpResult !== 'http-fallback') {
+              clearTimeout(timeoutId);
+              resolve({
+                ...httpResult,
+                viaHttp: true
+              });
+              messageQueue.current = messageQueue.current.filter(item => item.requestId !== requestId);
+              pendingRequests.current.delete(requestId);
+            }
+          })
+          .catch(httpError => {
+            console.log('HTTP fallback failed, keeping in WebSocket queue');
+          });
+      }
+    });
+  }, [isConnected]);
 
   const sendCommand = useCallback((command, payload = null) => {
     if (!isConnected || !ws.current) {
       console.error('WebSocket not connected, falling back to HTTP');
-      return sendCommandViaHTTP(command, payload);
+      sendCommandViaHTTP(command, payload);
+      return Date.now().toString();
     }
 
     const commandData = {
@@ -253,7 +414,8 @@ const WebSocketProvider = ({ children }) => {
       return Date.now().toString();
     } catch (error) {
       console.error('Error sending command via WebSocket, falling back to HTTP:', error);
-      return sendCommandViaHTTP(command, payload);
+      sendCommandViaHTTP(command, payload);
+      return Date.now().toString();
     }
   }, [isConnected]);
 
@@ -291,24 +453,30 @@ const WebSocketProvider = ({ children }) => {
         console.log(`Command sent successfully via HTTP: ${command}`);
 
         if (result.result) {
+          const responseKey = `${command}_${Date.now()}`;
+          const httpResponse = {
+            ...result.result,
+            timestamp: Date.now(),
+            viaHttp: true
+          };
+
           setCommandResponses(prev => ({
             ...prev,
-            [command]: {
-              ...result.result,
-              timestamp: Date.now(),
-              viaHttp: true
-            }
+            [responseKey]: httpResponse,
+            [command]: httpResponse
           }));
+
+          return httpResponse;
         }
 
         return 'http-fallback';
       } else {
         console.error('Failed to send command via HTTP:', result.error);
-        return null;
+        throw new Error(result.error || 'HTTP command failed');
       }
     } catch (error) {
       console.error('Error sending command via HTTP:', error);
-      return null;
+      throw error;
     }
   }, [getUsernameFromToken]);
 
@@ -334,21 +502,41 @@ const WebSocketProvider = ({ children }) => {
     }
 
     setIsConnected(false);
+    
+    pendingRequests.current.forEach((request) => {
+      if (request.reject) {
+        request.reject(new Error('Connection stopped'));
+      }
+    });
+    pendingRequests.current.clear();
+    
+    messageQueue.current = [];
   }, []);
 
   const getCommandResponse = useCallback((commandOrId) => {
-    const response = commandResponses[commandOrId];
-    console.log(`Getting response for ${commandOrId}:`, response);
-    return response;
+    if (commandResponses[commandOrId]) {
+      return commandResponses[commandOrId];
+    }
+    
+    const commandResponsesArray = Object.entries(commandResponses);
+    const matchingResponses = commandResponsesArray
+      .filter(([key, value]) => 
+        key.startsWith(`${commandOrId}_`) || 
+        (value.rawResponse && value.rawResponse.command === commandOrId)
+      )
+      .sort((a, b) => b[1].timestamp - a[1].timestamp); 
+    
+    return matchingResponses.length > 0 ? matchingResponses[0][1] : null;
   }, [commandResponses]);
 
   useEffect(() => {
     const cleanupInterval = setInterval(() => {
       const now = Date.now();
+      
       setCommandResponses(prev => {
         const newResponses = {};
         Object.entries(prev).forEach(([key, value]) => {
-          if (value.timestamp && now - value.timestamp < 30000) {
+          if (value.timestamp && now - value.timestamp < 300000) { 
             newResponses[key] = value;
           } else if (!value.timestamp) {
             newResponses[key] = value;
@@ -357,6 +545,25 @@ const WebSocketProvider = ({ children }) => {
         console.log(`Cleaned responses. Keeping ${Object.keys(newResponses).length} responses`);
         return newResponses;
       });
+      
+      pendingRequests.current.forEach((request, requestId) => {
+        if (now - request.timestamp > 35000) {
+          if (request.reject) {
+            request.reject(new Error(`Request timeout: ${request.command}`));
+          }
+          pendingRequests.current.delete(requestId);
+        }
+      });
+      
+      messageQueue.current = messageQueue.current.filter(item => {
+        const timestampMatch = item.requestId.match(/_(\d+)$/);
+        if (timestampMatch) {
+          const itemTime = parseInt(timestampMatch[1]);
+          return now - itemTime < 60000;
+        }
+        return true; 
+      });
+      
     }, 10000);
 
     return () => clearInterval(cleanupInterval);
@@ -402,7 +609,13 @@ const WebSocketProvider = ({ children }) => {
 
   const debugResponses = useCallback(() => {
     console.log('All stored command responses:', commandResponses);
-    return commandResponses;
+    console.log('Pending requests:', pendingRequests.current.size);
+    console.log('Queued messages:', messageQueue.current.length);
+    return {
+      commandResponses,
+      pendingRequests: pendingRequests.current.size,
+      queuedMessages: messageQueue.current.length
+    };
   }, [commandResponses]);
 
   const testWebSocketConnection = useCallback(() => {
@@ -441,11 +654,19 @@ const WebSocketProvider = ({ children }) => {
       if (ws.current) {
         ws.current.close(1000, 'Component unmounted');
       }
+      
+      pendingRequests.current.forEach((request) => {
+        if (request.reject) {
+          request.reject(new Error('Component unmounted'));
+        }
+      });
+      pendingRequests.current.clear();
     };
   }, [connectWebSocket, isValidToken, shouldAutoConnect]);
 
   const value = {
-    sendCommand,
+    sendCommand, 
+    sendCommandAsync, 
     lastMessage,
     isConnected,
     addListener,
@@ -461,7 +682,9 @@ const WebSocketProvider = ({ children }) => {
     checkAgentStatus,
     debugResponses,
     testWebSocketConnection,
-    username
+    username,
+    messageQueueSize: messageQueue.current.length,
+    pendingRequestsCount: pendingRequests.current.size
   };
 
   return (

@@ -21,13 +21,12 @@ const AddressLeasesTable = ({ leases }) => {
             <th>IP Address</th>
             <th>Device Name</th>
             <th>MAC Address</th>
-            <th>Lease Type</th>
             <th>Status</th>
           </tr>
         </thead>
         <tbody>
           {Object.entries(leases).map(([leaseId, leaseData]) => (
-            <tr key={leaseId} className={leaseData.status === 'Active' ? 'lease-active' : 'lease-inactive'}>
+            <tr key={leaseId} className={leaseData.state === 'Active' ? 'lease-active' : 'lease-inactive'}>
               <td className="ip-address">
                 <code>{leaseData.ip || 'N/A'}</code>
               </td>
@@ -35,16 +34,11 @@ const AddressLeasesTable = ({ leases }) => {
                 {leaseData.name || 'Unknown Device'}
               </td>
               <td className="mac-address">
-                <code>{leaseData.mac || leaseData.macAddress || 'N/A'}</code>
+                <code>{leaseData.mac || 'N/A'}</code>
               </td>
               <td>
-                <span className={`lease-type ${leaseData.leaseType?.toLowerCase() || 'dhcp'}`}>
-                  {leaseData.leaseType || 'DHCP'}
-                </span>
-              </td>
-              <td>
-                <span className={`status-badge ${leaseData.status === 'Active' ? 'active' : 'inactive'}`}>
-                  {leaseData.status || 'Unknown'}
+                <span className={`status-badge ${leaseData.state === 'Active' ? 'active' : 'inactive'}`}>
+                  {leaseData.state || 'Unknown'}
                 </span>
               </td>
             </tr>
@@ -53,7 +47,7 @@ const AddressLeasesTable = ({ leases }) => {
       </table>
       <div className="table-footer">
         <div className="summary-info">
-          Showing {Object.keys(leases).length} active leases
+          Showing {Object.keys(leases).length} leases
         </div>
       </div>
     </div>
@@ -75,7 +69,7 @@ const ScopeOptionsTable = ({ options }) => {
     <table className="data-table">
       <thead>
         <tr>
-          <th>Option ID</th>
+          <th>Option</th>
           <th>Name</th>
           <th>Value</th>
         </tr>
@@ -87,7 +81,11 @@ const ScopeOptionsTable = ({ options }) => {
             <td>
               <div className="option-name">{optionData.name || `Option ${optionId}`}</div>
             </td>
-            <td className="option-value">{optionData.value || 'N/A'}</td>
+            <td className="option-value">
+              {Array.isArray(optionData.value) 
+                ? optionData.value.join(', ') 
+                : optionData.value || 'N/A'}
+            </td>
           </tr>
         ))}
       </tbody>
@@ -117,12 +115,19 @@ const DHCP = () => {
   const initialCommandsSent = useRef(false);
   const refreshIntervalRef = useRef(null);
   const lastRefreshTimeRef = useRef(null);
+  const installationInProgressRef = useRef(false);
+  const dhcpDetailsCache = useRef({}); 
+  const selectedScopeRef = useRef(null); 
   
   const windowsInfo = {
     ip: '192.168.2.15',
     username: 'Administrator',
     password: 'abc123$'
   };
+
+  useEffect(() => {
+    selectedScopeRef.current = selectedScope;
+  }, [selectedScope]);
 
   const startAutoRefresh = () => {
     if (refreshIntervalRef.current) {
@@ -164,162 +169,269 @@ const DHCP = () => {
     }
   };
 
+  const extractResult = (responseData) => {
+    if (!responseData) return null;
+    
+    if (typeof responseData === 'string') {
+      try {
+        return JSON.parse(responseData);
+      } catch (e) {
+        return responseData;
+      }
+    }
+    
+    return responseData;
+  };
+
+  const loadScopes = () => {
+    if (!dhcpInstalled) {
+      console.log('DHCP not installed, skipping loadScopes');
+      return;
+    }
+    
+    console.log('Loading DHCP scopes...');
+    console.log('Sending command: get_dhcp_details_windows_ansible');
+    console.log('Payload:', { windows_info: windowsInfo });
+    
+    setLoading(true);
+    lastRefreshTimeRef.current = new Date();
+    
+    sendCommand('get_dhcp_details_windows_ansible', {
+      windows_info: windowsInfo
+    });
+  };
+
+  const processDHCPDetails = (responseData) => {
+    console.log('Processing DHCP details response:', responseData);
+    
+    const currentSelectedScope = selectedScopeRef.current;
+    console.log('Current selected scope (from ref):', currentSelectedScope);
+    
+    if (!responseData) {
+      console.log('No response data to process');
+      setScopes({});
+      setScopeDetails(null);
+      setLoading(false);
+      return;
+    }
+    
+    let dhcpDetails = responseData;
+    
+    if (responseData.dhcp_details) {
+      console.log('Found dhcp_details in response');
+      dhcpDetails = responseData.dhcp_details;
+    }
+    
+    console.log('DHCP details to process:', dhcpDetails);
+    
+    dhcpDetailsCache.current = dhcpDetails;
+    
+    if (typeof dhcpDetails === 'object' && dhcpDetails !== null) {
+      const scopesMap = {};
+      
+      Object.entries(dhcpDetails).forEach(([scopeId, scopeData]) => {
+        console.log(`Processing scope ${scopeId}:`, scopeData);
+        
+        if (scopeData && typeof scopeData === 'object') {
+          scopesMap[scopeId] = {
+            name: scopeData.name || scopeId,
+            subnet: '255.255.255.0', 
+            description: scopeData.description || ''
+          };
+        }
+      });
+      
+      console.log('Setting scopes:', scopesMap);
+      setScopes(scopesMap);
+      
+      if (currentSelectedScope && dhcpDetails[currentSelectedScope]) {
+        const scopeData = dhcpDetails[currentSelectedScope];
+        const updatedScopeDetails = {
+          scopename: scopeData.name || currentSelectedScope,
+          description: scopeData.description || '',
+          subnetmask: '255.255.255.0',
+          addresspool: scopeData.address_pool || {},
+          addressleases: scopeData.address_leases || {},
+          scopeoptions: scopeData.scope_options || {}
+        };
+        console.log('Setting scope details for', currentSelectedScope, ':', updatedScopeDetails);
+        setScopeDetails(updatedScopeDetails);
+      } 
+      else if (!currentSelectedScope && Object.keys(scopesMap).length > 0) {
+        const firstScopeId = Object.keys(scopesMap)[0];
+        console.log('Auto-selecting first scope:', firstScopeId);
+        setSelectedScope(firstScopeId);
+        selectedScopeRef.current = firstScopeId;
+        
+        const scopeData = dhcpDetails[firstScopeId];
+        const firstScopeDetails = {
+          scopename: scopeData.name || firstScopeId,
+          description: scopeData.description || '',
+          subnetmask: '255.255.255.0',
+          addresspool: scopeData.address_pool || {},
+          addressleases: scopeData.address_leases || {},
+          scopeoptions: scopeData.scope_options || {}
+        };
+        setScopeDetails(firstScopeDetails);
+      }
+      else if (currentSelectedScope && !dhcpDetails[currentSelectedScope] && Object.keys(scopesMap).length > 0) {
+        const firstScopeId = Object.keys(scopesMap)[0];
+        console.log('Selected scope not found, selecting first available:', firstScopeId);
+        setSelectedScope(firstScopeId);
+        selectedScopeRef.current = firstScopeId;
+        
+        const scopeData = dhcpDetails[firstScopeId];
+        const firstScopeDetails = {
+          scopename: scopeData.name || firstScopeId,
+          description: scopeData.description || '',
+          subnetmask: '255.255.255.0',
+          addresspool: scopeData.address_pool || {},
+          addressleases: scopeData.address_leases || {},
+          scopeoptions: scopeData.scope_options || {}
+        };
+        setScopeDetails(firstScopeDetails);
+      }
+    } else {
+      console.log('No valid scope data found in response');
+      setScopes({});
+      setScopeDetails(null);
+    }
+    
+    setLoading(false);
+  };
+
+  const fetchDHCPDetailsAfterInstallation = () => {
+    console.log('Fetching DHCP details after successful installation...');
+    setLoading(true);
+    
+    setTimeout(() => {
+      sendCommand('get_dhcp_details_windows_ansible', {
+        windows_info: windowsInfo
+      });
+    }, 2000);
+  };
+
+  const handleWebSocketMessage = (message) => {
+    console.log('DHCP received message:', message);
+    
+    let command, result, error;
+    
+    if (message.response) {
+      const responseObj = message.response;
+      command = responseObj.command;
+      result = responseObj.result;
+      error = responseObj.error;
+    } else if (message.type === 'COMMAND_RESPONSE') {
+      command = message.command;
+      result = message.result || message.data;
+      error = message.error;
+    } else if (message.action === 'response') {
+      command = message.command;
+      result = message.result;
+      error = message.error;
+    } else if (message.command) {
+      command = message.command;
+      result = message.result || message.data;
+      error = message.error;
+    }
+    
+    if (!command) {
+      console.log('No command found in message:', message);
+      return;
+    }
+    
+    console.log(`Processing response for command: ${command}`, { result, error });
+    
+    if (error) {
+      console.log(`Error from backend for command ${command}:`, error);
+      setLoading(false);
+      return;
+    }
+    
+    const responseData = extractResult(result);
+    console.log('Extracted response data:', responseData);
+    
+    switch(command) {
+      case 'check_dhcp_role_installed_windows_ansible':
+        console.log('Received response for DHCP check:', responseData);
+        
+        let isInstalled = false;
+        
+        if (typeof responseData === 'object' && responseData !== null) {
+          if (responseData.installed !== undefined) {
+            isInstalled = responseData.installed === true || 
+                         responseData.installed === "true" ||
+                         responseData.installed === "installed";
+          }
+        } else if (typeof responseData === 'string') {
+          isInstalled = responseData.toLowerCase().includes('true') || 
+                       responseData.toLowerCase().includes('installed') ||
+                       (!responseData.toLowerCase().includes('false') && 
+                        !responseData.toLowerCase().includes('not installed'));
+        }
+        
+        console.log(`DHCP installed status: ${isInstalled}`);
+        setDhcpInstalled(isInstalled);
+        setLoading(false);
+        
+        if (isInstalled) {
+          console.log('DHCP is installed, loading scopes...');
+          loadScopes();
+          startAutoRefresh();
+        } else {
+          console.log('DHCP not installed, showing install modal');
+          setShowInstallModal(true);
+        }
+        break;
+        
+      case 'get_dhcp_details_windows_ansible':
+        console.log('Received DHCP details response:', responseData);
+        processDHCPDetails(responseData);
+        break;
+        
+      case 'install_dhcp_role_windows_ansible':
+        console.log('DHCP installation response:', responseData);
+        
+        let installationSuccess = false;
+        
+        if (typeof responseData === 'string') {
+          const resultLower = responseData.toLowerCase();
+          installationSuccess = resultLower.includes('dhcp role installation done') || 
+                               resultLower.includes('installation done') || 
+                               resultLower.includes('success');
+        } else if (typeof responseData === 'object') {
+          const dataStr = JSON.stringify(responseData).toLowerCase();
+          installationSuccess = dataStr.includes('dhcp role installation done') ||
+                               responseData.success === true ||
+                               responseData.message === 'dhcp role installation done';
+        }
+        
+        if (installationSuccess) {
+          console.log('DHCP installation successful!');
+          alert('DHCP server installed successfully!');
+          setShowInstallModal(false);
+          setDhcpInstalled(true);
+          installationInProgressRef.current = false;
+          
+          setTimeout(() => {
+            fetchDHCPDetailsAfterInstallation();
+            startAutoRefresh();
+          }, 1500);
+        } else {
+          alert(`DHCP installation failed: ${JSON.stringify(responseData)}`);
+          setLoading(false);
+          installationInProgressRef.current = false;
+        }
+        break;
+        
+      default:
+        console.log(`Unhandled command: ${command}`);
+    }
+  };
+
   useEffect(() => {
     console.log('DHCP Component Mounted - Setting up WebSocket listener');
     
-    const handleWebSocketMessage = (message) => {
-      console.log('DHCP received message:', message);
-      
-      let command, result, error;
-      
-      if (message.type === 'COMMAND_RESPONSE') {
-        command = message.command;
-        result = message.result || message.data;
-      } else if (message.action === 'response') {
-        command = message.command;
-        result = message.result;
-        error = message.error;
-      }
-      
-      if (!command) return;
-      
-      console.log(`Processing response for command: ${command}`, { result, error });
-      
-      if (error) {
-        console.log(`Error from backend for command ${command}:`, error);
-        return;
-      }
-      
-      let responseData = result;
-      if (typeof result === 'string') {
-        try {
-          responseData = JSON.parse(result);
-        } catch (e) {
-          console.log('Result is not JSON, using as string:', result);
-          responseData = result;
-        }
-      }
-      
-      switch(command) {
-        case 'check_dhcp_role_installed_windows_ansible':
-          console.log('Received response for DHCP check:', responseData);
-          
-          let isInstalled = false;
-          
-          if (typeof responseData === 'object' && responseData !== null) {
-            if (responseData.installed !== undefined) {
-              isInstalled = responseData.installed === true || 
-                           responseData.installed === "true" ||
-                           responseData.installed === "installed";
-            }
-          } else if (typeof responseData === 'string') {
-            isInstalled = responseData.includes('true') || 
-                         responseData.includes('installed') ||
-                         !responseData.includes('false') && 
-                         !responseData.includes('not installed');
-          }
-          
-          console.log(`DHCP installed status: ${isInstalled}`);
-          setDhcpInstalled(isInstalled);
-          setLoading(false);
-          
-          if (isInstalled) {
-            loadScopes();
-            startAutoRefresh();
-          } else {
-            setShowInstallModal(true);
-          }
-          break;
-          
-        case 'get_dhcp_scope_details_windows_ansible':
-          console.log('Received DHCP scope details:', responseData);
-          
-          if (responseData && responseData.dhcp_details) {
-            const dhcpDetails = responseData.dhcp_details;
-            
-            const scopesMap = {};
-            Object.entries(dhcpDetails).forEach(([scopeId, scopeData]) => {
-              scopesMap[scopeId] = {
-                name: scopeData.name || scopeId,
-                subnet: scopeData.subnet_mask || '255.255.255.0',
-                description: scopeData.description || ''
-              };
-            });
-            
-            setScopes(scopesMap);
-            
-            if (selectedScope && dhcpDetails[selectedScope]) {
-              const scopeData = dhcpDetails[selectedScope];
-              setScopeDetails({
-                scopename: scopeData.name || selectedScope,
-                description: scopeData.description || '',
-                subnetmask: scopeData.subnet_mask || '255.255.255.0',
-                addresspool: scopeData.address_pool || {},
-                addressleases: scopeData.address_leases || {},
-                scopeoptions: scopeData.scope_options || {}
-              });
-            }
-          }
-          setLoading(false);
-          break;
-          
-        case 'install_dhcp_role_windows_ansible':
-          console.log('DHCP installation response:', responseData);
-          
-          let installationSuccess = false;
-          
-          if (typeof responseData === 'string') {
-            installationSuccess = responseData.includes('installation done') || 
-                                 responseData.includes('success') ||
-                                 responseData.includes('dhcp role installation done');
-          } else if (typeof responseData === 'object') {
-            installationSuccess = responseData.status === 'success' || 
-                                 responseData.message === 'dhcp role installation done';
-          }
-          
-          if (installationSuccess) {
-            console.log('DHCP installation successful');
-            alert('DHCP server installed successfully!');
-            setShowInstallModal(false);
-            setDhcpInstalled(true);
-            startAutoRefresh();
-            loadScopes();
-          } else {
-            alert('DHCP installation failed. Please try again.');
-          }
-          setLoading(false);
-          break;
-          
-        case 'configure_dhcp_scope_windows_ansible':
-          console.log('DHCP scope configuration response:', responseData);
-          
-          let scopeCreationSuccess = false;
-          
-          if (typeof responseData === 'string') {
-            scopeCreationSuccess = responseData.includes('scope configured') || 
-                                  responseData.includes('success') ||
-                                  responseData.includes('dhcp scope configured');
-          } else if (typeof responseData === 'object') {
-            scopeCreationSuccess = responseData.status === 'success' || 
-                                  responseData.message === 'dhcp scope configured';
-          }
-          
-          if (scopeCreationSuccess) {
-            alert('Scope created successfully!');
-            setShowCreateModal(false);
-            resetForm();
-            loadScopes();
-          } else {
-            alert(`Error creating scope: ${responseData?.error || 'Unknown error'}`);
-          }
-          setLoading(false);
-          break;
-          
-        default:
-          console.log(`Unhandled command: ${command}`);
-      }
-    };
-
     const removeListener = addListener(handleWebSocketMessage);
     
     const timer = setTimeout(() => {
@@ -347,7 +459,7 @@ const DHCP = () => {
       stopAutoRefresh();
       if (removeListener) removeListener();
     };
-  }, [addListener, sendCommand, isConnected, selectedScope]);
+  }, [addListener, sendCommand, isConnected]);
 
   const handleTabChange = (tab) => {
     console.log(`Tab changed to: ${tab}`);
@@ -359,28 +471,39 @@ const DHCP = () => {
       console.log(`Scope changed to: ${selectedScope}, fetching details...`);
       
       setLoading(true);
-      sendCommand('get_dhcp_scope_details_windows_ansible', {
+      sendCommand('get_dhcp_details_windows_ansible', {
         windows_info: windowsInfo
       });
     }
   }, [selectedScope, dhcpInstalled]);
 
-  const loadScopes = () => {
-    if (!dhcpInstalled) return;
-    
-    console.log('Loading DHCP scopes...');
-    setLoading(true);
-    lastRefreshTimeRef.current = new Date();
-    
-    sendCommand('get_dhcp_scope_details_windows_ansible', {
-      windows_info: windowsInfo
-    });
-  };
-
   const selectScope = (scopeId) => {
     console.log(`Selecting scope: ${scopeId}`);
+    
     setSelectedScope(scopeId);
     setActiveTab('address-pool');
+    
+    if (dhcpDetailsCache.current[scopeId]) {
+      console.log('Using cached data for scope:', scopeId);
+      const scopeData = dhcpDetailsCache.current[scopeId];
+      const updatedScopeDetails = {
+        scopename: scopeData.name || scopeId,
+        description: scopeData.description || '',
+        subnetmask: '255.255.255.0',
+        addresspool: scopeData.address_pool || {},
+        addressleases: scopeData.address_leases || {},
+        scopeoptions: scopeData.scope_options || {}
+      };
+      console.log('Setting scope details from cache:', updatedScopeDetails);
+      setScopeDetails(updatedScopeDetails);
+    }
+    
+    if (dhcpInstalled) {
+      setLoading(true);
+      sendCommand('get_dhcp_details_windows_ansible', {
+        windows_info: windowsInfo
+      });
+    }
   };
 
   const createScope = () => {
@@ -400,6 +523,16 @@ const DHCP = () => {
     }
     
     console.log('Creating DHCP scope...');
+    console.log('Command: configure_dhcp_scope_windows_ansible');
+    console.log('Payload:', {
+      scope_name: formData.name,
+      start_range: formData.start_range,
+      end_range: formData.end_range,
+      subnet_mask: formData.subnet_mask,
+      description: formData.description || '',
+      windows_info: windowsInfo
+    });
+    
     setLoading(true);
     
     const payload = {
@@ -415,7 +548,16 @@ const DHCP = () => {
   };
 
   const installDHCP = () => {
+    if (installationInProgressRef.current) {
+      console.log('Installation already in progress');
+      return;
+    }
+
+    installationInProgressRef.current = true;
     console.log('Installing DHCP server...');
+    console.log('Command: install_dhcp_role_windows_ansible');
+    console.log('Payload:', { windows_info: windowsInfo });
+    
     setLoading(true);
     
     sendCommand('install_dhcp_role_windows_ansible', {
@@ -437,13 +579,16 @@ const DHCP = () => {
 
   const calculateAddressCount = (startIP, endIP) => {
     if (!startIP || !endIP) return 0;
-    const start = startIP.split('.').map(Number);
-    const end = endIP.split('.').map(Number);
-    let count = 0;
-    for (let i = 0; i < 4; i++) {
-      count += (end[i] - start[i]) * Math.pow(256, 3 - i);
-    }
-    return Math.abs(count) + 1;
+    
+    const ipToInt = (ip) => {
+      const parts = ip.split('.').map(Number);
+      return (parts[0] << 24) + (parts[1] << 16) + (parts[2] << 8) + parts[3];
+    };
+    
+    const start = ipToInt(startIP);
+    const end = ipToInt(endIP);
+    
+    return Math.abs(end - start) + 1;
   };
 
   const resetForm = () => {
@@ -472,30 +617,16 @@ const DHCP = () => {
       <div className="dhcp-loading">
         <div className="spinner"></div>
         <p>Checking DHCP status...</p>
-        <div style={{ marginTop: '20px', fontSize: '12px', color: '#666' }}>
-          <div>WebSocket: {isConnected ? 'Connected' : 'Disconnected'}</div>
-          <div>Command: check_dhcp_role_installed_windows_ansible</div>
-        </div>
       </div>
     );
   }
 
-  if (!dhcpInstalled) {
+  if (!dhcpInstalled && showInstallModal) {
     return (
       <div className="dhcp-install-modal-overlay">
         <div className="dhcp-install-modal">
           <div className="modal-header">
-            <h2>DHCP Server Required</h2>
-            <div style={{
-              fontSize: '11px',
-              color: '#28a745',
-              background: '#e6f7e6',
-              padding: '4px 8px',
-              borderRadius: '4px',
-              marginLeft: '10px'
-            }}>
-              Waiting for DHCP status...
-            </div>
+            <h2><div style={{ color: 'red', fontSize: '17px' }}>DHCP Server Required!</div></h2>
           </div>
           <div className="modal-content">
             <div className="warning-icon">
@@ -512,12 +643,15 @@ const DHCP = () => {
               </div>
             </div>
             
-            <div className="connection-status">
-              <div className={`status-indicator ${isConnected ? 'connected' : 'disconnected'}`}>
-                <div className="status-dot"></div>
-                <span>WebSocket: {isConnected ? 'Connected' : 'Disconnected'}</span>
+            <div className="connection-info">
+              <h4>Connection Details</h4>
+              <div className="windows-connection-details">
+                <p><strong>Target Server:</strong> {windowsInfo.ip}</p>
+                <p><strong>Username:</strong> {windowsInfo.username}</p>
+                <p><strong>WebSocket Status:</strong> {isConnected ? 'Connected' : 'Disconnected'}</p>
               </div>
             </div>
+            
           </div>
           <div className="modal-footer">
             <button className="btn-secondary" onClick={() => window.history.back()}>
@@ -710,7 +844,8 @@ const DHCP = () => {
               <h2>DHCP Server</h2>
               <p>Dynamic Host Configuration</p>
               <div style={{ fontSize: '11px', color: '#666', marginTop: '5px' }}>
-                <i className="fas fa-sync-alt"></i> Auto-refresh: 30s
+                <i className="fas fa-sync-alt"></i> Auto-refresh
+                <div>Server: {windowsInfo.ip}</div>
               </div>
             </div>
           </div>
@@ -729,6 +864,13 @@ const DHCP = () => {
                 <div className="no-scopes-message">
                   <i className="fas fa-inbox"></i>
                   <p>No scopes configured</p>
+                  <button 
+                    className="btn-primary btn-sm"
+                    onClick={() => setShowCreateModal(true)}
+                    style={{ marginTop: '10px', padding: '5px 10px', fontSize: '12px' }}
+                  >
+                    <i className="fas fa-plus"></i> Create Scope
+                  </button>
                 </div>
               ) : (
                 Object.entries(scopes).map(([scopeId, scopeData]) => (
@@ -777,7 +919,10 @@ const DHCP = () => {
               <div className="stat-item">
                 <span className="stat-label">Active Leases</span>
                 <span className="stat-value">
-                  {scopeDetails?.addressleases ? Object.keys(scopeDetails.addressleases).length : 0}
+                  {scopeDetails?.addressleases ? 
+                    Object.values(scopeDetails.addressleases).filter(lease => lease.state === 'Active').length 
+                    : 0
+                  }
                 </span>
               </div>
               <div className="stat-item">
@@ -813,11 +958,16 @@ const DHCP = () => {
                 <span>Server: {windowsInfo.ip}</span>
                 <span style={{ marginLeft: '15px' }}>
                   <i className="fas fa-sync-alt" style={{ marginRight: '5px' }}></i>
-                  Auto-refresh every 30 seconds
                 </span>
                 <span style={{ marginLeft: '15px', color: '#28a745' }}>
                   Last refresh: {formatTimeSinceLastRefresh()}
                 </span>
+                {loading && (
+                  <span style={{ marginLeft: '15px', color: '#007bff' }}>
+                    <i className="fas fa-spinner fa-spin" style={{ marginRight: '5px' }}></i>
+                    Loading...
+                  </span>
+                )}
               </div>
             </div>
             <div className="top-bar-actions">
@@ -880,7 +1030,13 @@ const DHCP = () => {
                     </div>
                     <p className="scope-description">{scopeDetails?.description || 'No description provided'}</p>
                     <div style={{ fontSize: '12px', color: '#666', marginTop: '5px' }}>
-                      <i className="fas fa-clock"></i> Data auto-updates every 30 seconds
+                      <i className="fas fa-clock"></i> 
+                      {loading && (
+                        <span style={{ marginLeft: '15px', color: '#007bff' }}>
+                          <i className="fas fa-spinner fa-spin" style={{ marginRight: '5px' }}></i>
+                          Loading data...
+                        </span>
+                      )}
                     </div>
                   </div>
                   <div className="scope-actions">
@@ -940,57 +1096,55 @@ const DHCP = () => {
                 </div>
                 
                 <div className="tab-content">
-                  {activeTab === 'address-pool' && scopeDetails?.addresspool && (
+                  {activeTab === 'address-pool' && (
                     <div className="tab-pane active">
                       <div className="content-card">
                         <div className="card-header">
                           <div className="card-header-content">
                             <h3>Address Pool Configuration</h3>
-                            <div style={{
-                              background: '#6c757d',
-                              color: 'white',
-                              padding: '4px 8px',
-                              borderRadius: '4px',
-                              fontSize: '11px',
-                              fontWeight: 'bold',
-                              marginLeft: '10px'
-                            }}>
-                              LIVE DATA
-                            </div>
                           </div>
                           <div style={{ fontSize: '12px', color: '#666', marginTop: '5px' }}>
-                            Auto-refreshed from get_dhcp_scope_details_windows_ansible
+                            Auto-refreshed • Last update: {formatTimeSinceLastRefresh()}
                           </div>
                         </div>
                         <div className="card-body">
-                          <div className="address-range">
-                            <div className="range-input">
-                              <h4>Start Address</h4>
-                              <div className="ip-display">
-                                {scopeDetails.addresspool.start_range || 'N/A'}
+                          {loading ? (
+                            <div className="loading-state">
+                              <div className="spinner"></div>
+                              <p>Loading address pool...</p>
+                            </div>
+                          ) : (
+                            <>
+                              <div className="address-range">
+                                <div className="range-input">
+                                  <h4>Start Address</h4>
+                                  <div className="ip-display">
+                                    {scopeDetails?.addresspool?.start_range || 'N/A'}
+                                  </div>
+                                </div>
+                                <div className="range-input">
+                                  <h4>End Address</h4>
+                                  <div className="ip-display">
+                                    {scopeDetails?.addresspool?.end_range || 'N/A'}
+                                  </div>
+                                </div>
                               </div>
-                            </div>
-                            <div className="range-input">
-                              <h4>End Address</h4>
-                              <div className="ip-display">
-                                {scopeDetails.addresspool.end_range || 'N/A'}
+                              <div className="range-info">
+                                <div className="range-stat">
+                                  <span className="stat-label">Total Addresses</span>
+                                  <span className="stat-value">
+                                    {scopeDetails?.addresspool?.start_range && scopeDetails?.addresspool?.end_range
+                                      ? calculateAddressCount(
+                                          scopeDetails.addresspool.start_range, 
+                                          scopeDetails.addresspool.end_range
+                                        )
+                                      : 0
+                                    }
+                                  </span>
+                                </div>
                               </div>
-                            </div>
-                          </div>
-                          <div className="range-info">
-                            <div className="range-stat">
-                              <span className="stat-label">Total Addresses</span>
-                              <span className="stat-value">
-                                {scopeDetails.addresspool.start_range && scopeDetails.addresspool.end_range
-                                  ? calculateAddressCount(
-                                      scopeDetails.addresspool.start_range, 
-                                      scopeDetails.addresspool.end_range
-                                    )
-                                  : 0
-                                }
-                              </span>
-                            </div>
-                          </div>
+                            </>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -1002,24 +1156,13 @@ const DHCP = () => {
                         <div className="card-header">
                           <div className="card-header-content">
                             <h3>Active Leases</h3>
-                            <div style={{
-                              background: '#28a745',
-                              color: 'white',
-                              padding: '4px 8px',
-                              borderRadius: '4px',
-                              fontSize: '11px',
-                              fontWeight: 'bold',
-                              marginLeft: '10px'
-                            }}>
-                              LIVE DATA
-                            </div>
                           </div>
                           <div style={{
                             fontSize: '12px',
                             color: '#666',
                             marginTop: '5px'
                           }}>
-                            Auto-refreshed from get_dhcp_scope_details_windows_ansible • Last update: {formatTimeSinceLastRefresh()}
+                            Auto-refreshed • Last update: {formatTimeSinceLastRefresh()}
                           </div>
                         </div>
                         <div className="card-body">
@@ -1042,20 +1185,9 @@ const DHCP = () => {
                         <div className="card-header">
                           <div className="card-header-content">
                             <h3>Scope Options</h3>
-                            <div style={{
-                              background: '#28a745',
-                              color: 'white',
-                              padding: '4px 8px',
-                              borderRadius: '4px',
-                              fontSize: '11px',
-                              fontWeight: 'bold',
-                              marginLeft: '10px'
-                            }}>
-                              LIVE DATA
-                            </div>
                           </div>
                           <div style={{ fontSize: '12px', color: '#666', marginTop: '5px' }}>
-                            Auto-refreshed from get_dhcp_scope_details_windows_ansible
+                            Auto-refreshed • Last update: {formatTimeSinceLastRefresh()}
                           </div>
                         </div>
                         <div className="card-body">

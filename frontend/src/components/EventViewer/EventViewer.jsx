@@ -52,9 +52,9 @@ const EventViewer = () => {
     const timeoutRef = useRef(null);
 
     const navItems = [
-        'Dashboard', 'DNS Configuration', 'Event Viewer', 'Backups', 'Users', 
+        'Dashboard', 'DNS Configuration', 'Event Viewer', 'DHCP', 'Users', 
         'Resource Monitor', 'WDS', 'Networking', 'Device Auto Config', 
-        'Device Backup', 'Routing'
+        'Active Directory', 'Routing'
     ];
 
     useEffect(() => {
@@ -254,7 +254,6 @@ const EventViewer = () => {
                                         onChange={(e) => setAutoRefresh(e.target.checked)}
                                         disabled={!isConnected}
                                     />
-                                    <span className="toggle-slider"></span>
                                     Auto Refresh 
                                 </label>
                             </div>
@@ -422,12 +421,9 @@ const EventViewer = () => {
 
                         <div className="connection-status-card">
                             <h3 className="status-title">Connection Status</h3>
-                            <div className={`status-indicator ${isConnected ? 'connected' : 'disconnected'}`}>
-                                <div className="status-dot"></div>
                                 <div className="status-text">
                                     {isConnected ? 'Connected to System' : 'Disconnected'}
                                 </div>
-                            </div>
                             {isConnected && (
                                 <div className="status-details">
                                     <div className="status-detail">

@@ -16,7 +16,7 @@ const Sidebar = ({ onItemClick }) => {
     { id: 'wds', label: 'WDS', path: '/wds' },
     { id: 'networking', label: 'Networking', path: '/networking' },
     { id: 'device-auto-config', label: 'Device Auto Config', path: '/device-auto-config' },
-    { id: 'device-backup', label: 'Device Backup', path: '/device-backup' },
+    { id: 'active-directory', label: 'Active Directory', path: '/active-directory' },
     { id: 'routing', label: 'Routing', path: '/routing' }
   ];
 

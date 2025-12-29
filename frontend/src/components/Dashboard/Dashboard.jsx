@@ -24,8 +24,6 @@ const Dashboard = () => {
   const refreshTimeoutRef = useRef(null);
   const commandTimeoutsRef = useRef([]);
 
-  console.log('DASHBOARD RENDERED!');
-
   useEffect(() => {
     console.log('DEBUG - Current state:', {
       isConnected,
@@ -37,7 +35,6 @@ const Dashboard = () => {
 
   useEffect(() => {
     const removeListener = addListener((data) => {
-      console.log('WebSocket message received in Dashboard:', data);
 
       if (data.action === 'response' && data.command && data.result) {
         console.log('Processing response:', data.command, data.result);
@@ -46,7 +43,6 @@ const Dashboard = () => {
 
         if (data.command === 'get_hostname' && result.status === 'success') {
           const hostname = result.data?.hostname || 'Unknown';
-          console.log('Setting hostname:', hostname);
           setSystemInfo(prev => ({
             ...prev,
             hostname: hostname
@@ -107,7 +103,6 @@ const Dashboard = () => {
 
         if (isRefreshing) {
           setIsRefreshing(false);
-          console.log('Data received - stopping refresh');
 
           if (refreshTimeoutRef.current) {
             clearTimeout(refreshTimeoutRef.current);
@@ -122,7 +117,6 @@ const Dashboard = () => {
 
   const refreshData = useCallback(() => {
     if (isConnected && !isRefreshing) {
-      console.log('Manual refresh started by user');
       setIsRefreshing(true);
 
       if (refreshTimeoutRef.current) {
@@ -175,7 +169,6 @@ const Dashboard = () => {
 
   useEffect(() => {
     if (isConnected && !initialLoadRef.current) {
-      console.log('Initial data load - sending commands');
       initialLoadRef.current = true;
 
       setSystemInfo({
@@ -207,7 +200,6 @@ const Dashboard = () => {
 
       setTimeout(() => {
         if (!dataLoaded) {
-          console.log('No data received after initial load timeout - checking stored responses');
           checkStoredResponses();
         }
       }, 8000);
@@ -215,7 +207,6 @@ const Dashboard = () => {
   }, [isConnected, sendCommand, dataLoaded]);
 
   const checkStoredResponses = useCallback(() => {
-    console.log('Checking for stored responses...');
     const responses = {
       hostname: getCommandResponse('get_hostname'),
       os: getCommandResponse('get_os_info'),
@@ -282,7 +273,6 @@ const Dashboard = () => {
 
   const fetchCpuData = useCallback(() => {
     if (isConnected) {
-      console.log('Refreshing CPU data...');
       sendCommand('get_cpu_usage');
     }
   }, [isConnected, sendCommand]);
@@ -367,7 +357,7 @@ const Dashboard = () => {
             <div className="system-info-card uniform-card">
               <h3 className="section-title">System Connection</h3>
               <div className={`connection-subtitle ${isRealData ? 'real-data' : 'waiting-data'}`}>
-                {isRealData ? 'Live Data Connected' : 'Waiting for Data...'}
+                {isRealData ? '' : 'Waiting for Data...'}
               </div>
               <div className="info-grid">
                 <div className="md-colspan-2">
@@ -386,14 +376,6 @@ const Dashboard = () => {
                   <label className="info-label">OS:</label>
                   <div className={`info-value ${systemInfo.os !== 'Loading...' ? 'real-data-value' : 'loading-data'}`}>
                     {systemInfo.os}
-                  </div>
-                </div>
-                <div className="md-colspan-2">
-                  <div className="connection-status">
-                    <span className="status-indicator"></span>
-                    <span>WebSocket {isConnected ? 'Connected' : 'Disconnected'}</span>
-                    {isRealData && <span className="real-data-badge">Live</span>}
-                    {!isRealData && isConnected && <span className="waiting-badge">Receiving...</span>}
                   </div>
                 </div>
               </div>

@@ -7,9 +7,9 @@ const Routing = () => {
   const { sendCommand, addListener } = useWebSocket();
   
   const navButtons = [
-    'Dashboard', 'DNS Configuration', 'Event Viewer', 'Backups', 'Users',
+    'Dashboard', 'DNS Configuration', 'Event Viewer', 'DHCP', 'Users',
     'Resource Monitor', 'WDS', 'Networking', 'Device Auto Config',
-    'Device Backup', 'Routing'
+    'Active Directory', 'Routing'
   ];
   
   const [activeTab, setActiveTab] = useState('rip');

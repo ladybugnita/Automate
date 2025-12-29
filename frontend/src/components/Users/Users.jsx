@@ -14,9 +14,9 @@ const Users = () => {
   const [fetchAttempted, setFetchAttempted] = useState(false);
 
   const navItems = [
-    'Dashboard', 'DNS Configuration','Event Viewer', 'Backups', 'Users',
+    'Dashboard', 'DNS Configuration','Event Viewer', 'DHCP', 'Users',
     'Resource Monitor', 'WDS', 'Networking', 'Device Auto Config',
-    'Device Backup', 'Routing'
+    'Active Directory', 'Routing'
   ];
 
   useEffect(() => {
@@ -235,7 +235,6 @@ const Users = () => {
             <div className="users-list-header">
               <h2 className="users-list-title">
                 List of Users
-                {isConnected && <span className="real-data-badge">Live System</span>}
               </h2>
               <button
                 onClick={handleManualRefresh}
@@ -331,7 +330,7 @@ const Users = () => {
                 </button>
                 {!isConnected && (
                   <div className="no-connection-notice">
-                    🔌 Connect to backend to add users
+                    Connect to backend to add users
                   </div>
                 )}
               </div>
