@@ -6,7 +6,7 @@ backend/.env.development
 
 frontend/.env
 frontend/.env.local
-frontend/.env.development
+frontend/.env.development`2`
 
 *.env
 .env
