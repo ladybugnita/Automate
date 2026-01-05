@@ -3,7 +3,14 @@ import { useWebSocket } from '../../context/WebSocketContext';
 import './DNSConfiguration.css';
 
 function DNSConfiguration() {
-  const { sendCommand, isConnected, addListener } = useWebSocket();
+  const { 
+    sendCommand, 
+    isConnected, 
+    addListener, 
+    installations, 
+    INSTALLATION_STATUS,
+    updateInstallationStatus 
+  } = useWebSocket();
   
   const [dnsRoleInstalled, setDnsRoleInstalled] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -24,6 +31,7 @@ function DNSConfiguration() {
   const [installProgress, setInstallProgress] = useState('');
   const [installSuccess, setInstallSuccess] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [checkingStatus, setCheckingStatus] = useState(true); // Start with checking true
   
   const [newZoneData, setNewZoneData] = useState({
     zoneName: '',
@@ -45,6 +53,8 @@ function DNSConfiguration() {
   const recordCreationInProgressRef = useRef(false);
   const installationInProgressRef = useRef(false);
   const lastRefreshTimeRef = useRef(null);
+  const initialCheckDone = useRef(false);
+  const listenerAdded = useRef(false);
 
   const navItems = [
     'Dashboard', 'DNS Configuration', 'Event Viewer', 'DHCP', 'Users', 
@@ -186,11 +196,16 @@ function DNSConfiguration() {
   };
 
   const handleWebSocketMessage = (message) => {
-    console.log('DNS received message:', message);
+    console.log('DNS received WebSocket message:', message);
     
     let command, result, error;
     
-    if (message.type === 'COMMAND_RESPONSE') {
+    if (message.response) {
+      const responseObj = message.response;
+      command = responseObj.command;
+      result = responseObj.result;
+      error = responseObj.error;
+    } else if (message.type === 'COMMAND_RESPONSE') {
       command = message.command;
       result = message.result || message.data;
       error = message.error;
@@ -198,21 +213,26 @@ function DNSConfiguration() {
       command = message.command;
       result = message.result;
       error = message.error;
-    } else if (message.response) {
-
-      const responseObj = message.response;
-      command = responseObj.command;
-      result = responseObj.result;
-      error = responseObj.error;
+    } else if (message.command) {
+      command = message.command;
+      result = message.result || message.data;
+      error = message.error;
     }
     
-    if (!command) return;
+    if (!command) {
+      console.log('No command found in message:', message);
+      return;
+    }
     
     console.log(`Processing response for command: ${command}`, { result, error });
     
     if (error) {
       console.log(`Error from backend for command ${command}:`, error);
       setError(`Error: ${error}`);
+      setLoading(false);
+      setCheckingStatus(false);
+      setActionLoading(false);
+      installationInProgressRef.current = false;
       return;
     }
     
@@ -241,17 +261,26 @@ function DNSConfiguration() {
         console.log(`DNS installed status: ${isInstalled}`);
         setDnsRoleInstalled(isInstalled);
         setLoading(false);
+        setCheckingStatus(false);
+        
+        updateInstallationStatus('dns', 
+          isInstalled ? INSTALLATION_STATUS.INSTALLED : INSTALLATION_STATUS.NOT_INSTALLED,
+          isInstalled ? 100 : 0,
+          isInstalled ? 'DNS server is installed' : 'DNS server is not installed'
+        );
         
         if (isInstalled) {
+          console.log('DNS is installed, loading zones...');
+          setShowInstallModal(false);
           fetchDNSDetails();
         } else {
+          console.log('DNS not installed, showing install modal');
           setShowInstallModal(true);
         }
         break;
         
       case 'get_dns_details_windows_ansible':
         console.log('Received DNS details response:', responseData);
-        
         processDNSDetails(responseData);
         break;
         
@@ -262,54 +291,44 @@ function DNSConfiguration() {
         
         if (typeof responseData === 'string') {
           const resultLower = responseData.toLowerCase();
-          installationSuccess = resultLower.includes('dns role installation done') || 
-                               resultLower.includes('installation done') || 
-                               resultLower.includes('success');
-          
-          if (responseData[0] && typeof responseData === 'object') {
-            let resultString = '';
-            for (let i = 0; i < 100; i++) {
-              if (responseData[i] !== undefined) {
-                resultString += responseData[i];
-              } else {
-                break;
-              }
-            }
-            const stringLower = resultString.toLowerCase();
-            installationSuccess = stringLower.includes('dns role installation done');
-          }
+          installationSuccess = resultLower.includes('dns role installation done');
         } else if (typeof responseData === 'object') {
           const dataStr = JSON.stringify(responseData).toLowerCase();
           installationSuccess = dataStr.includes('dns role installation done') ||
-                               responseData.success === true ||
-                               responseData.message === 'dns role installation done';
+                               responseData.message === 'dns role installation done' ||
+                               responseData.result === 'dns role installation done';
         }
         
         if (installationSuccess) {
           console.log('DNS installation successful!');
+          
+          updateInstallationStatus('dns', INSTALLATION_STATUS.INSTALLED, 100, 'DNS server installed successfully');
+          
           setInstallSuccess(true);
           setInstallProgress('Installation completed successfully!');
           setDnsRoleInstalled(true);
           hasCheckedDNSRef.current = true;
-          
           setInstalling(false);
+          installationInProgressRef.current = false;
           
           setTimeout(() => {
             setShowInstallModal(false);
             setTimeout(() => {
               setInstallSuccess(false);
               setInstallProgress('');
-              installationInProgressRef.current = false;
               
               fetchDNSDetailsAfterInstallation();
               
             }, 300);
           }, 2000);
         } else {
+          console.log('DNS installation failed:', responseData);
           setError(`Installation failed: Unexpected response: ${JSON.stringify(responseData)}`);
           setInstallProgress('Installation failed');
           setInstalling(false);
           installationInProgressRef.current = false;
+          
+          updateInstallationStatus('dns', INSTALLATION_STATUS.FAILED, 0, 'Installation failed');
         }
         break;
         
@@ -410,35 +429,71 @@ function DNSConfiguration() {
   };
 
   useEffect(() => {
-    console.log('DNS Component Mounted - Setting up WebSocket listener');
+    if (!listenerAdded.current) {
+      console.log('DNS Component Mounted - Setting up WebSocket listener');
+      const removeListener = addListener(handleWebSocketMessage);
+      listenerAdded.current = true;
+      
+      return () => {
+        if (removeListener) removeListener();
+        listenerAdded.current = false;
+      };
+    }
+  }, [addListener]);
+
+  useEffect(() => {
+    console.log('DNS useEffect running, initialCheckDone:', initialCheckDone.current);
     
-    const removeListener = addListener(handleWebSocketMessage);
+    if (initialCheckDone.current) {
+      console.log('Initial check already done, skipping');
+      return;
+    }
     
-    const timer = setTimeout(() => {
-      if (!initialCommandsSent.current && isConnected) {
-        console.log('SENDING INITIAL DNS CHECK COMMAND');
-        console.log('Command: check_dns_role_installed_windows_ansible');
-        
-        setLoading(true);
+    const performInitialCheck = () => {
+      console.log('Performing initial DNS check...');
+      
+      setCheckingStatus(true);
+      setLoading(true);
+      setDnsRoleInstalled(null);
+      setShowInstallModal(false);
+      
+      if (installations.dns?.status === INSTALLATION_STATUS.INSTALLING) {
+        console.log('DNS is installing globally, showing installation progress');
+        setDnsRoleInstalled(false);
+        setShowInstallModal(false); 
+        setCheckingStatus(false);
+        setLoading(false);
+        initialCheckDone.current = true;
+        return;
+      }
+      
+      if (isConnected) {
+        console.log('WebSocket is connected, sending check command...');
+        console.log('SENDING DNS CHECK COMMAND: check_dns_role_installed_windows_ansible');
+        console.log('Payload:', { windows_info: windowsInfo });
         
         sendCommand('check_dns_role_installed_windows_ansible', { 
           windows_info: windowsInfo 
         });
         
-        initialCommandsSent.current = true;
-      } else if (!isConnected) {
-        console.log('WebSocket not connected');
-        setDnsRoleInstalled(false);
-        setLoading(false);
-        setShowInstallModal(true);
+        initialCheckDone.current = true;
+      } else {
+        console.log('WebSocket not connected, will retry in 1 second');
+        setTimeout(() => {
+          performInitialCheck();
+        }, 1000);
       }
-    }, 1000);
-    
-    return () => {
-      clearTimeout(timer);
-      if (removeListener) removeListener();
     };
-  }, [addListener, sendCommand, isConnected]);
+    
+    performInitialCheck();
+    
+  }, [isConnected, installations.dns, sendCommand, INSTALLATION_STATUS]);
+
+  useEffect(() => {
+    return () => {
+      initialCheckDone.current = false;
+    };
+  }, []);
 
   const fetchDNSDetails = () => {
     if (!isConnected || zonesLoading) {
@@ -457,30 +512,39 @@ function DNSConfiguration() {
   };
 
   const installDNSRole = () => {
-    if (installationInProgressRef.current) {
+    if (installations.dns?.status === INSTALLATION_STATUS.INSTALLING) {
       console.log('Installation already in progress');
       return;
     }
 
-    installationInProgressRef.current = true;
+    console.log('Starting DNS installation...');
+    console.log('Sending command: install_dns_role_windows_ansible');
+    console.log('Payload:', { windows_info: windowsInfo });
+    
     setInstalling(true);
     setInstallSuccess(false);
     setInstallProgress('Starting DNS role installation...');
     setError(null);
+    installationInProgressRef.current = true;
     
-    const progressTimeout = setTimeout(() => {
-      if (installationInProgressRef.current) {
-        setInstallProgress('Installing DNS server role...');
-      }
-    }, 2000);
-    
-    console.log('Sending install DNS role command');
+    updateInstallationStatus('dns', INSTALLATION_STATUS.INSTALLING, 0, 'Starting DNS installation...');
     
     sendCommand('install_dns_role_windows_ansible', {
       windows_info: windowsInfo
     });
+  };
+
+  const checkDNSAgain = () => {
+    console.log('Checking DNS status again...');
+    setCheckingStatus(true);
+    setLoading(true);
+    initialCheckDone.current = false;
     
-    return () => clearTimeout(progressTimeout);
+    setTimeout(() => {
+      sendCommand('check_dns_role_installed_windows_ansible', { 
+        windows_info: windowsInfo 
+      });
+    }, 500);
   };
 
   const createZone = () => {
@@ -518,7 +582,6 @@ function DNSConfiguration() {
       return;
     }
 
-    // Validate required fields based on record type
     if ((newRecordData.recordType === 'A' || newRecordData.recordType === 'CNAME') && !newRecordData.recordValue) {
       setError('Record value is required for this record type');
       return;
@@ -697,6 +760,123 @@ function DNSConfiguration() {
       fetchZoneRecords(selectedZone);
     }
   }, [selectedZone]);
+
+  if (checkingStatus) {
+    return (
+      <div className="dns-loading">
+        <div className="spinner"></div>
+        <p>Checking DNS Server Status...</p>
+        <p className="loading-subtext">Please wait while we check if DNS is installed...</p>
+      </div>
+    );
+  }
+
+  if (installations.dns?.status === INSTALLATION_STATUS.INSTALLING) {
+    return (
+      <div className="dns-installation-progress">
+        <div className="installation-container">
+          <div className="installation-icon">
+            <i className="fas fa-download fa-3x"></i>
+          </div>
+          <h2>Installing DNS Server...</h2>
+          <div className="progress-section">
+            <p className="progress-message">{installations.dns.message || 'Installing DNS server role...'}</p>
+            <div className="progress-bar-container">
+              <div className="progress-bar">
+                <div className="progress-fill" style={{ width: `${installations.dns.progress || 0}%` }}></div>
+              </div>
+              <div className="progress-text">{installations.dns.progress || 0}%</div>
+            </div>
+          </div>
+          <div className="installation-info">
+            <p><i className="fas fa-info-circle"></i> Installation is in progress on server: {windowsInfo.ip}</p>
+            <p><i className="fas fa-clock"></i> This may take several minutes. Please wait...</p>
+            <div className="navigation-note">
+              <i className="fas fa-external-link-alt"></i> 
+              <div>
+                <p className="note-title">You can navigate away</p>
+                <p>Installation continues in background. You can visit other pages and come back later.</p>
+              </div>
+            </div>
+          </div>
+          <button 
+            className="btn-secondary"
+            onClick={checkDNSAgain}
+            style={{ marginTop: '20px' }}
+          >
+            <i className="fas fa-sync-alt"></i> Check Installation Status
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (!dnsRoleInstalled && showInstallModal) {
+    return (
+      <div className="dns-install-modal-overlay">
+        <div className="dns-install-modal">
+          <div className="modal-header">
+            <h2><div style={{ color: 'red', fontSize: '17px' }}>DNS Server Required!</div></h2>
+          </div>
+          <div className="modal-content">
+            <div className="warning-icon">
+              <i className="fas fa-exclamation-triangle"></i>
+            </div>
+            <h3>DNS Server Not Installed</h3>
+            <p>The DNS server role is not installed on this system. You need to install it to manage DNS zones.</p>
+            
+            <div className="warning-note">
+              <i className="fas fa-info-circle"></i>
+              <div>
+                <p className="note-title">Note:</p>
+                <p>Installing the DNS server may require a system restart. Ensure you save all work before proceeding.</p>
+              </div>
+            </div>
+            
+            <div className="connection-info">
+              <h4>Connection Details</h4>
+              <div className="windows-connection-details">
+                <p><strong>Target Server:</strong> {windowsInfo.ip}</p>
+                <p><strong>Username:</strong> {windowsInfo.username}</p>
+                <p><strong>WebSocket Status:</strong> {isConnected ? 'Connected' : 'Disconnected'}</p>
+              </div>
+            </div>
+            
+          </div>
+          <div className="modal-footer">
+            <button className="btn-secondary" onClick={checkDNSAgain} disabled={checkingStatus || loading}>
+              <i className="fas fa-sync-alt"></i> 
+              {checkingStatus ? 'Checking...' : 'Check Again'}
+            </button>
+            <button 
+              className="btn-primary" 
+              onClick={installDNSRole}
+              disabled={!isConnected || installations.dns?.status === INSTALLATION_STATUS.INSTALLING || checkingStatus || loading}
+            >
+              {installations.dns?.status === INSTALLATION_STATUS.INSTALLING || installing ? (
+                <>
+                  <div className="mini-spinner"></div> Installing...
+                </>
+              ) : (
+                <>
+                  <i className="fas fa-download"></i> Install DNS Server
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (dnsRoleInstalled === null && !checkingStatus) {
+    return (
+      <div className="dns-loading">
+        <div className="spinner"></div>
+        <p>Loading DNS...</p>
+      </div>
+    );
+  }
 
   const renderDNSRoleStatus = () => {
     if (loading) {
@@ -1249,9 +1429,9 @@ function DNSConfiguration() {
                     <button 
                       className="btn-install"
                       onClick={installDNSRole}
-                      disabled={installing}
+                      disabled={installing || installations.dns?.status === INSTALLATION_STATUS.INSTALLING}
                     >
-                      Begin Installation
+                      {installations.dns?.status === INSTALLATION_STATUS.INSTALLING ? 'Installing...' : 'Begin Installation'}
                     </button>
                   </div>
                 </>

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useWebSocket } from '../../context/WebSocketContext';
 import './DHCP.css';
 
@@ -94,7 +94,15 @@ const ScopeOptionsTable = ({ options }) => {
 };
 
 const DHCP = () => {
-  const { sendCommand, isConnected, addListener } = useWebSocket();
+  const { 
+    sendCommand, 
+    isConnected, 
+    addListener, 
+    installations, 
+    INSTALLATION_STATUS,
+    updateInstallationStatus
+  } = useWebSocket();
+  
   const [dhcpInstalled, setDhcpInstalled] = useState(null);
   const [scopes, setScopes] = useState({});
   const [selectedScope, setSelectedScope] = useState(null);
@@ -104,6 +112,7 @@ const DHCP = () => {
   const [showInstallModal, setShowInstallModal] = useState(false);
   const [currentStep, setCurrentStep] = useState(1);
   const [loading, setLoading] = useState(false);
+  const [checkingStatus, setCheckingStatus] = useState(true); // Start with checking true
   const [formData, setFormData] = useState({
     name: '',
     description: '',
@@ -112,15 +121,16 @@ const DHCP = () => {
     end_range: ''
   });
 
-  const initialCommandsSent = useRef(false);
+  const initialCheckDone = useRef(false);
   const refreshIntervalRef = useRef(null);
   const lastRefreshTimeRef = useRef(null);
-  const installationInProgressRef = useRef(false);
   const dhcpDetailsCache = useRef({}); 
-  const selectedScopeRef = useRef(null); 
+  const selectedScopeRef = useRef(null);
+  const listenerAdded = useRef(false);
+  const installationStarted = useRef(false);
   
   const windowsInfo = {
-    ip: '192.168.2.15',
+    ip: '192.168.1.2',
     username: 'Administrator',
     password: 'abc123$'
   };
@@ -128,6 +138,289 @@ const DHCP = () => {
   useEffect(() => {
     selectedScopeRef.current = selectedScope;
   }, [selectedScope]);
+
+  const handleWebSocketMessage = useCallback((message) => {
+    console.log('DHCP received WebSocket message:', message);
+    
+    let command, result, error;
+    
+    if (message.response) {
+      const responseObj = message.response;
+      command = responseObj.command;
+      result = responseObj.result;
+      error = responseObj.error;
+    } else if (message.type === 'COMMAND_RESPONSE') {
+      command = message.command;
+      result = message.result || message.data;
+      error = message.error;
+    } else if (message.action === 'response') {
+      command = message.command;
+      result = message.result;
+      error = message.error;
+    } else if (message.command) {
+      command = message.command;
+      result = message.result || message.data;
+      error = message.error;
+    }
+    
+    if (!command) {
+      console.log('No command found in message:', message);
+      return;
+    }
+    
+    console.log(`Processing response for command: ${command}`, { result, error });
+    
+    if (error) {
+      console.log(`Error from backend for command ${command}:`, error);
+      setLoading(false);
+      setCheckingStatus(false);
+      return;
+    }
+    
+    const extractResult = (responseData) => {
+      if (!responseData) return null;
+      
+      if (typeof responseData === 'string') {
+        try {
+          return JSON.parse(responseData);
+        } catch (e) {
+          return responseData;
+        }
+      }
+      
+      return responseData;
+    };
+    
+    const responseData = extractResult(result);
+    console.log('Extracted response data:', responseData);
+    
+    switch(command) {
+      case 'check_dhcp_role_installed_windows_ansible':
+        console.log('Received response for DHCP check:', responseData);
+        
+        let isInstalled = false;
+        
+        if (typeof responseData === 'object' && responseData !== null) {
+          if (responseData.installed === "true") {
+            isInstalled = true;
+          } else if (responseData.installed === "false") {
+            isInstalled = false;
+          } else if (responseData.installed !== undefined) {
+            isInstalled = responseData.installed === true || 
+                         responseData.installed === "true" ||
+                         responseData.installed === "installed";
+          }
+        } else if (typeof responseData === 'string') {
+          try {
+            const parsed = JSON.parse(responseData);
+            if (parsed.installed === "true") {
+              isInstalled = true;
+            } else if (parsed.installed === "false") {
+              isInstalled = false;
+            }
+          } catch (e) {
+            const resultLower = responseData.toLowerCase();
+            isInstalled = resultLower.includes('true') || resultLower.includes('installed');
+          }
+        }
+        
+        console.log(`DHCP installed status: ${isInstalled}`);
+        setDhcpInstalled(isInstalled);
+        setCheckingStatus(false);
+        
+        updateInstallationStatus('dhcp', 
+          isInstalled ? INSTALLATION_STATUS.INSTALLED : INSTALLATION_STATUS.NOT_INSTALLED,
+          isInstalled ? 100 : 0,
+          isInstalled ? 'DHCP server is installed' : 'DHCP server is not installed'
+        );
+        
+        if (isInstalled) {
+          console.log('DHCP is installed, loading scopes...');
+          setShowInstallModal(false);
+          sendCommand('get_dhcp_details_windows_ansible', {
+            windows_info: windowsInfo
+          });
+          startAutoRefresh();
+        } else {
+          console.log('DHCP not installed, showing install modal');
+          setShowInstallModal(true);
+        }
+        break;
+        
+      case 'get_dhcp_details_windows_ansible':
+        console.log('Received DHCP details response:', responseData);
+        
+        let dhcpDetails = responseData;
+        
+        if (responseData && typeof responseData === 'object') {
+          if (responseData.dhcp_details) {
+            dhcpDetails = responseData.dhcp_details;
+          } else if (responseData.result && responseData.result.dhcp_details) {
+            dhcpDetails = responseData.result.dhcp_details;
+          }
+        } else if (typeof responseData === 'string') {
+          try {
+            const parsed = JSON.parse(responseData);
+            if (parsed.dhcp_details) {
+              dhcpDetails = parsed.dhcp_details;
+            } else if (parsed.result && parsed.result.dhcp_details) {
+              dhcpDetails = parsed.result.dhcp_details;
+            }
+          } catch (e) {
+            console.log('Could not parse DHCP details as JSON');
+          }
+        }
+        
+        console.log('Processed DHCP details:', dhcpDetails);
+        processDHCPDetails(dhcpDetails);
+        break;
+        
+      case 'install_dhcp_role_windows_ansible':
+        console.log('DHCP installation response:', responseData);
+        
+        let installationSuccess = false;
+        
+        if (typeof responseData === 'string') {
+          const resultLower = responseData.toLowerCase();
+          installationSuccess = resultLower.includes('dhcp role installation done');
+        } else if (typeof responseData === 'object') {
+          const dataStr = JSON.stringify(responseData).toLowerCase();
+          installationSuccess = dataStr.includes('dhcp role installation done') ||
+                               responseData.message === 'dhcp role installation done' ||
+                               responseData.result === 'dhcp role installation done';
+        }
+        
+        if (installationSuccess) {
+          console.log('DHCP installation successful!');
+          
+          updateInstallationStatus('dhcp', INSTALLATION_STATUS.INSTALLED, 100, 'DHCP server installed successfully');
+          
+          setShowInstallModal(false);
+          setDhcpInstalled(true);
+          installationStarted.current = false;
+          setLoading(false);
+          
+          console.log('Installation done, checking status in 2 seconds...');
+          setTimeout(() => {
+            console.log('Sending check command after installation...');
+            sendCommand('check_dhcp_role_installed_windows_ansible', { 
+              windows_info: windowsInfo 
+            });
+          }, 2000);
+        } else {
+          console.log('DHCP installation failed:', responseData);
+          updateInstallationStatus('dhcp', INSTALLATION_STATUS.FAILED, 0, 'Installation failed');
+          setLoading(false);
+          installationStarted.current = false;
+        }
+        break;
+        
+      case 'configure_dhcp_scope_windows_ansible':
+        console.log('DHCP scope configuration response:', responseData);
+        
+        let scopeConfigured = false;
+        
+        if (typeof responseData === 'string') {
+          const resultLower = responseData.toLowerCase();
+          scopeConfigured = resultLower.includes('dhcp scope configured');
+        } else if (typeof responseData === 'object') {
+          const dataStr = JSON.stringify(responseData).toLowerCase();
+          scopeConfigured = dataStr.includes('dhcp scope configured') ||
+                           responseData.message === 'dhcp scope configured' ||
+                           responseData.result === 'dhcp scope configured';
+        }
+        
+        if (scopeConfigured) {
+          console.log('DHCP scope configured successfully!');
+          alert('DHCP scope created successfully!');
+          
+          setShowCreateModal(false);
+          resetForm();
+          setLoading(false);
+          
+          setTimeout(() => {
+            sendCommand('get_dhcp_details_windows_ansible', {
+              windows_info: windowsInfo
+            });
+          }, 1000);
+        } else {
+          console.log('DHCP scope configuration failed:', responseData);
+          alert('Failed to create DHCP scope. Please try again.');
+          setLoading(false);
+        }
+        break;
+        
+      default:
+        console.log(`Unhandled command: ${command}`);
+    }
+    
+  }, [updateInstallationStatus, INSTALLATION_STATUS, sendCommand]);
+
+  useEffect(() => {
+    if (!listenerAdded.current) {
+      console.log('DHCP Component Mounted - Setting up WebSocket listener');
+      const removeListener = addListener(handleWebSocketMessage);
+      listenerAdded.current = true;
+      
+      return () => {
+        if (removeListener) removeListener();
+        listenerAdded.current = false;
+        stopAutoRefresh();
+      };
+    }
+  }, [addListener, handleWebSocketMessage]);
+
+  useEffect(() => {
+    console.log('DHCP useEffect running, initialCheckDone:', initialCheckDone.current);
+    
+    if (initialCheckDone.current) {
+      console.log('Initial check already done, skipping');
+      return;
+    }
+    
+    const performInitialCheck = () => {
+      console.log('Performing initial DHCP check...');
+      
+      setCheckingStatus(true);
+      setDhcpInstalled(null);
+      setShowInstallModal(false);
+      
+      if (installations.dhcp?.status === INSTALLATION_STATUS.INSTALLING) {
+        console.log('DHCP is installing globally, showing installation progress');
+        setDhcpInstalled(false);
+        setShowInstallModal(false); 
+        setCheckingStatus(false);
+        initialCheckDone.current = true;
+        return;
+      }
+      
+      if (isConnected) {
+        console.log('WebSocket is connected, sending check command...');
+        console.log('SENDING DHCP CHECK COMMAND: check_dhcp_role_installed_windows_ansible');
+        console.log('Payload:', { windows_info: windowsInfo });
+        
+        sendCommand('check_dhcp_role_installed_windows_ansible', { 
+          windows_info: windowsInfo 
+        });
+        
+        initialCheckDone.current = true;
+      } else {
+        console.log('WebSocket not connected, will retry in 1 second');
+        setTimeout(() => {
+          performInitialCheck();
+        }, 1000);
+      }
+    };
+    
+    performInitialCheck();
+    
+  }, [isConnected, installations.dhcp, sendCommand, INSTALLATION_STATUS]);
+
+  useEffect(() => {
+    return () => {
+      initialCheckDone.current = false;
+    };
+  }, []);
 
   const startAutoRefresh = () => {
     if (refreshIntervalRef.current) {
@@ -138,7 +431,9 @@ const DHCP = () => {
       if (dhcpInstalled && isConnected) {
         console.log('Auto-refreshing DHCP data...');
         lastRefreshTimeRef.current = new Date();
-        loadScopes();
+        sendCommand('get_dhcp_details_windows_ansible', {
+          windows_info: windowsInfo
+        });
       }
     }, 30000);
 
@@ -169,20 +464,6 @@ const DHCP = () => {
     }
   };
 
-  const extractResult = (responseData) => {
-    if (!responseData) return null;
-    
-    if (typeof responseData === 'string') {
-      try {
-        return JSON.parse(responseData);
-      } catch (e) {
-        return responseData;
-      }
-    }
-    
-    return responseData;
-  };
-
   const loadScopes = () => {
     if (!dhcpInstalled) {
       console.log('DHCP not installed, skipping loadScopes');
@@ -201,25 +482,18 @@ const DHCP = () => {
     });
   };
 
-  const processDHCPDetails = (responseData) => {
-    console.log('Processing DHCP details response:', responseData);
+  const processDHCPDetails = (dhcpDetails) => {
+    console.log('Processing DHCP details:', dhcpDetails);
     
     const currentSelectedScope = selectedScopeRef.current;
     console.log('Current selected scope (from ref):', currentSelectedScope);
     
-    if (!responseData) {
-      console.log('No response data to process');
+    if (!dhcpDetails) {
+      console.log('No DHCP details to process');
       setScopes({});
       setScopeDetails(null);
       setLoading(false);
       return;
-    }
-    
-    let dhcpDetails = responseData;
-    
-    if (responseData.dhcp_details) {
-      console.log('Found dhcp_details in response');
-      dhcpDetails = responseData.dhcp_details;
     }
     
     console.log('DHCP details to process:', dhcpDetails);
@@ -235,7 +509,7 @@ const DHCP = () => {
         if (scopeData && typeof scopeData === 'object') {
           scopesMap[scopeId] = {
             name: scopeData.name || scopeId,
-            subnet: '255.255.255.0', 
+            subnet: '255.255.255.0',
             description: scopeData.description || ''
           };
         }
@@ -300,167 +574,6 @@ const DHCP = () => {
     setLoading(false);
   };
 
-  const fetchDHCPDetailsAfterInstallation = () => {
-    console.log('Fetching DHCP details after successful installation...');
-    setLoading(true);
-    
-    setTimeout(() => {
-      sendCommand('get_dhcp_details_windows_ansible', {
-        windows_info: windowsInfo
-      });
-    }, 2000);
-  };
-
-  const handleWebSocketMessage = (message) => {
-    console.log('DHCP received message:', message);
-    
-    let command, result, error;
-    
-    if (message.response) {
-      const responseObj = message.response;
-      command = responseObj.command;
-      result = responseObj.result;
-      error = responseObj.error;
-    } else if (message.type === 'COMMAND_RESPONSE') {
-      command = message.command;
-      result = message.result || message.data;
-      error = message.error;
-    } else if (message.action === 'response') {
-      command = message.command;
-      result = message.result;
-      error = message.error;
-    } else if (message.command) {
-      command = message.command;
-      result = message.result || message.data;
-      error = message.error;
-    }
-    
-    if (!command) {
-      console.log('No command found in message:', message);
-      return;
-    }
-    
-    console.log(`Processing response for command: ${command}`, { result, error });
-    
-    if (error) {
-      console.log(`Error from backend for command ${command}:`, error);
-      setLoading(false);
-      return;
-    }
-    
-    const responseData = extractResult(result);
-    console.log('Extracted response data:', responseData);
-    
-    switch(command) {
-      case 'check_dhcp_role_installed_windows_ansible':
-        console.log('Received response for DHCP check:', responseData);
-        
-        let isInstalled = false;
-        
-        if (typeof responseData === 'object' && responseData !== null) {
-          if (responseData.installed !== undefined) {
-            isInstalled = responseData.installed === true || 
-                         responseData.installed === "true" ||
-                         responseData.installed === "installed";
-          }
-        } else if (typeof responseData === 'string') {
-          isInstalled = responseData.toLowerCase().includes('true') || 
-                       responseData.toLowerCase().includes('installed') ||
-                       (!responseData.toLowerCase().includes('false') && 
-                        !responseData.toLowerCase().includes('not installed'));
-        }
-        
-        console.log(`DHCP installed status: ${isInstalled}`);
-        setDhcpInstalled(isInstalled);
-        setLoading(false);
-        
-        if (isInstalled) {
-          console.log('DHCP is installed, loading scopes...');
-          loadScopes();
-          startAutoRefresh();
-        } else {
-          console.log('DHCP not installed, showing install modal');
-          setShowInstallModal(true);
-        }
-        break;
-        
-      case 'get_dhcp_details_windows_ansible':
-        console.log('Received DHCP details response:', responseData);
-        processDHCPDetails(responseData);
-        break;
-        
-      case 'install_dhcp_role_windows_ansible':
-        console.log('DHCP installation response:', responseData);
-        
-        let installationSuccess = false;
-        
-        if (typeof responseData === 'string') {
-          const resultLower = responseData.toLowerCase();
-          installationSuccess = resultLower.includes('dhcp role installation done') || 
-                               resultLower.includes('installation done') || 
-                               resultLower.includes('success');
-        } else if (typeof responseData === 'object') {
-          const dataStr = JSON.stringify(responseData).toLowerCase();
-          installationSuccess = dataStr.includes('dhcp role installation done') ||
-                               responseData.success === true ||
-                               responseData.message === 'dhcp role installation done';
-        }
-        
-        if (installationSuccess) {
-          console.log('DHCP installation successful!');
-          alert('DHCP server installed successfully!');
-          setShowInstallModal(false);
-          setDhcpInstalled(true);
-          installationInProgressRef.current = false;
-          
-          setTimeout(() => {
-            fetchDHCPDetailsAfterInstallation();
-            startAutoRefresh();
-          }, 1500);
-        } else {
-          alert(`DHCP installation failed: ${JSON.stringify(responseData)}`);
-          setLoading(false);
-          installationInProgressRef.current = false;
-        }
-        break;
-        
-      default:
-        console.log(`Unhandled command: ${command}`);
-    }
-  };
-
-  useEffect(() => {
-    console.log('DHCP Component Mounted - Setting up WebSocket listener');
-    
-    const removeListener = addListener(handleWebSocketMessage);
-    
-    const timer = setTimeout(() => {
-      if (!initialCommandsSent.current && isConnected) {
-        console.log('SENDING INITIAL DHCP CHECK COMMAND');
-        console.log('Command: check_dhcp_role_installed_windows_ansible');
-        
-        setLoading(true);
-        
-        sendCommand('check_dhcp_role_installed_windows_ansible', { 
-          windows_info: windowsInfo 
-        });
-        
-        initialCommandsSent.current = true;
-      } else if (!isConnected) {
-        console.log('WebSocket not connected');
-        setDhcpInstalled(false);
-        setLoading(false);
-        setShowInstallModal(true);
-      }
-    }, 1000);
-    
-    return () => {
-      clearTimeout(timer);
-      stopAutoRefresh();
-      if (removeListener) removeListener();
-    };
-  }, [addListener, sendCommand, isConnected]);
-
   const handleTabChange = (tab) => {
     console.log(`Tab changed to: ${tab}`);
     setActiveTab(tab);
@@ -471,9 +584,7 @@ const DHCP = () => {
       console.log(`Scope changed to: ${selectedScope}, fetching details...`);
       
       setLoading(true);
-      sendCommand('get_dhcp_details_windows_ansible', {
-        windows_info: windowsInfo
-      });
+      loadScopes();
     }
   }, [selectedScope, dhcpInstalled]);
 
@@ -500,9 +611,7 @@ const DHCP = () => {
     
     if (dhcpInstalled) {
       setLoading(true);
-      sendCommand('get_dhcp_details_windows_ansible', {
-        windows_info: windowsInfo
-      });
+      loadScopes();
     }
   };
 
@@ -524,45 +633,68 @@ const DHCP = () => {
     
     console.log('Creating DHCP scope...');
     console.log('Command: configure_dhcp_scope_windows_ansible');
-    console.log('Payload:', {
-      scope_name: formData.name,
-      start_range: formData.start_range,
-      end_range: formData.end_range,
-      subnet_mask: formData.subnet_mask,
-      description: formData.description || '',
-      windows_info: windowsInfo
-    });
-    
-    setLoading(true);
     
     const payload = {
+      windows_info: windowsInfo,
       scope_name: formData.name,
       start_range: formData.start_range,
       end_range: formData.end_range,
       subnet_mask: formData.subnet_mask,
-      description: formData.description || '',
-      windows_info: windowsInfo
+      description: formData.description || ''
     };
+    
+    console.log('Payload:', payload);
+    
+    setLoading(true);
     
     sendCommand('configure_dhcp_scope_windows_ansible', payload);
   };
 
+  const checkDHCPInstallation = () => {
+    if (!isConnected) {
+      console.log('WebSocket not connected, skipping DHCP check');
+      return;
+    }
+    console.log('Checking DHCP installation...');
+    console.log('Sending command: check_dhcp_role_installed_windows_ansible');
+    console.log('Payload:', { windows_info: windowsInfo });
+    
+    setCheckingStatus(true);
+    initialCheckDone.current = false;
+    
+    sendCommand('check_dhcp_role_installed_windows_ansible', { 
+      windows_info: windowsInfo 
+    });
+  };
+
   const installDHCP = () => {
-    if (installationInProgressRef.current) {
+    if (installations.dhcp?.status === INSTALLATION_STATUS.INSTALLING) {
       console.log('Installation already in progress');
       return;
     }
 
-    installationInProgressRef.current = true;
-    console.log('Installing DHCP server...');
-    console.log('Command: install_dhcp_role_windows_ansible');
+    console.log('Starting DHCP installation...');
+    console.log('Sending command: install_dhcp_role_windows_ansible');
     console.log('Payload:', { windows_info: windowsInfo });
     
     setLoading(true);
+    installationStarted.current = true;
+    
+    updateInstallationStatus('dhcp', INSTALLATION_STATUS.INSTALLING, 0, 'Starting DHCP installation...');
     
     sendCommand('install_dhcp_role_windows_ansible', {
       windows_info: windowsInfo
     });
+  };
+
+  const checkDHCPAgain = () => {
+    console.log('Checking DHCP status again...');
+    setCheckingStatus(true);
+    initialCheckDone.current = false;
+    
+    setTimeout(() => {
+      checkDHCPInstallation();
+    }, 500);
   };
 
   const deleteScope = () => {
@@ -612,11 +744,52 @@ const DHCP = () => {
     return calculateAddressCount(formData.start_range, formData.end_range);
   };
 
-  if (loading && dhcpInstalled === null) {
+  if (checkingStatus) {
     return (
       <div className="dhcp-loading">
         <div className="spinner"></div>
-        <p>Checking DHCP status...</p>
+        <p>Checking DHCP Server Status...</p>
+        <p className="loading-subtext">Please wait while we check if DHCP is installed...</p>
+      </div>
+    );
+  }
+
+  if (installations.dhcp?.status === INSTALLATION_STATUS.INSTALLING) {
+    return (
+      <div className="dhcp-installation-progress">
+        <div className="installation-container">
+          <div className="installation-icon">
+            <i className="fas fa-download fa-3x"></i>
+          </div>
+          <h2>Installing DHCP Server...</h2>
+          <div className="progress-section">
+            <p className="progress-message">{installations.dhcp.message || 'Installing DHCP server role...'}</p>
+            <div className="progress-bar-container">
+              <div className="progress-bar">
+                <div className="progress-fill" style={{ width: `${installations.dhcp.progress || 0}%` }}></div>
+              </div>
+              <div className="progress-text">{installations.dhcp.progress || 0}%</div>
+            </div>
+          </div>
+          <div className="installation-info">
+            <p><i className="fas fa-info-circle"></i> Installation is in progress on server: {windowsInfo.ip}</p>
+            <p><i className="fas fa-clock"></i> This may take several minutes. Please wait...</p>
+            <div className="navigation-note">
+              <i className="fas fa-external-link-alt"></i> 
+              <div>
+                <p className="note-title">You can navigate away</p>
+                <p>Installation continues in background. You can visit other pages and come back later.</p>
+              </div>
+            </div>
+          </div>
+          <button 
+            className="btn-secondary"
+            onClick={checkDHCPAgain}
+            style={{ marginTop: '20px' }}
+          >
+            <i className="fas fa-sync-alt"></i> Check Installation Status
+          </button>
+        </div>
       </div>
     );
   }
@@ -654,15 +827,16 @@ const DHCP = () => {
             
           </div>
           <div className="modal-footer">
-            <button className="btn-secondary" onClick={() => window.history.back()}>
-              <i className="fas fa-arrow-left"></i> Go Back
+            <button className="btn-secondary" onClick={checkDHCPAgain} disabled={checkingStatus || loading}>
+              <i className="fas fa-sync-alt"></i> 
+              {checkingStatus ? 'Checking...' : 'Check Again'}
             </button>
             <button 
               className="btn-primary" 
               onClick={installDHCP}
-              disabled={!isConnected || loading}
+              disabled={!isConnected || installations.dhcp?.status === INSTALLATION_STATUS.INSTALLING || checkingStatus || loading}
             >
-              {loading ? (
+              {installations.dhcp?.status === INSTALLATION_STATUS.INSTALLING || loading ? (
                 <>
                   <div className="mini-spinner"></div> Installing...
                 </>
@@ -674,6 +848,15 @@ const DHCP = () => {
             </button>
           </div>
         </div>
+      </div>
+    );
+  }
+
+  if (dhcpInstalled === null && !checkingStatus) {
+    return (
+      <div className="dhcp-loading">
+        <div className="spinner"></div>
+        <p>Loading DHCP...</p>
       </div>
     );
   }
@@ -966,6 +1149,12 @@ const DHCP = () => {
                   <span style={{ marginLeft: '15px', color: '#007bff' }}>
                     <i className="fas fa-spinner fa-spin" style={{ marginRight: '5px' }}></i>
                     Loading...
+                  </span>
+                )}
+                {installations.dhcp?.status === INSTALLATION_STATUS.INSTALLING && (
+                  <span style={{ marginLeft: '15px', color: '#ff9800' }}>
+                    <i className="fas fa-spinner fa-spin" style={{ marginRight: '5px' }}></i>
+                    Installing DHCP...
                   </span>
                 )}
               </div>

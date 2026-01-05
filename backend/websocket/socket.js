@@ -9,14 +9,14 @@ import db from "../config/db.js";
 dotenv.config({ path: path.resolve("backend/.env") });
 
 const SECRET = process.env.JWT_SECRET;
-const PORT = 8081;
+const socket_port=8081;
 
 const app = express();
 const server = http.createServer(app);
 
 const wss = new WebSocketServer({ server, path: "/socket" });
 
-console.log("WebSocket Server:", `ws://localhost:${PORT}/socket`);
+console.log("WebSocket Server:", `ws://my_ip:${socket_port}/socket`);
 
 const agentConnections = new Map();
 const frontendConnections = new Map();
@@ -424,6 +424,6 @@ setInterval(() => {
     }
 }, 60000);
 
-server.listen(PORT, () => {
-    console.log(`WebSocket server running on port: ${PORT}`);
+server.listen(socket_port, '0.0.0.0', () => {
+    console.log(`WebSocket server running on port: ${socket_port}`);
 });

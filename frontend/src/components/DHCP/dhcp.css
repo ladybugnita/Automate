@@ -2,6 +2,9 @@
   height: 100vh;
   background-color: var(--gray-50);
   font-family: var(--font-family);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .dhcp-loading {
@@ -42,6 +45,7 @@
   justify-content: center;
   z-index: 1000;
   padding: 1rem;
+  pointer-events: none;
 }
 
 .dhcp-install-modal {
@@ -51,11 +55,16 @@
   width: 100%;
   max-width: 480px;
   overflow: hidden;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  pointer-events: auto;
 }
 
 .dhcp-install-modal .modal-header {
   padding: 1.5rem;
   border-bottom: 1px solid var(--gray-200);
+  flex-shrink: 0;
 }
 
 .dhcp-install-modal .modal-header h2 {
@@ -68,6 +77,8 @@
 .dhcp-install-modal .modal-content {
   padding: 1.5rem;
   text-align: center;
+  overflow-y: auto;
+  flex: 1;
 }
 
 .dhcp-install-modal .warning-icon {
@@ -138,6 +149,7 @@
   display: flex;
   justify-content: flex-end;
   gap: 0.75rem;
+  flex-shrink: 0;
 }
 
 .modal-overlay {
@@ -172,6 +184,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-shrink: 0;
 }
 
 .create-scope-modal .modal-header h2 {
@@ -207,6 +220,7 @@
   padding: 1.5rem;
   border-bottom: 1px solid var(--gray-200);
   background-color: var(--gray-50);
+  flex-shrink: 0;
 }
 
 .step-indicators {
@@ -358,6 +372,7 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
+  flex-shrink: 0;
 }
 
 .footer-right {
@@ -452,7 +467,9 @@
 
 .dhcp-layout {
   display: flex;
-  height: 100vh;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .dhcp-sidebar {
@@ -462,6 +479,8 @@
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .sidebar-header {
@@ -470,6 +489,7 @@
   display: flex;
   align-items: center;
   gap: 0.75rem;
+  flex-shrink: 0;
 }
 
 .dhcp-icon {
@@ -504,6 +524,7 @@
 .sidebar-section {
   padding: 1.5rem;
   border-bottom: 1px solid var(--gray-200);
+  flex-shrink: 0;
 }
 
 .section-header {
@@ -692,6 +713,7 @@
   flex-direction: column;
   overflow: hidden;
   min-width: 0;
+  min-height: 0;
 }
 
 .top-bar {
@@ -728,6 +750,7 @@
   padding: 1.5rem;
   overflow-y: auto;
   min-height: 0;
+  overflow-x: hidden;
 }
 
 .empty-state {
@@ -822,6 +845,7 @@
   display: flex;
   gap: 0.5rem;
   margin-top: 1rem;
+  flex-wrap: wrap;
 }
 
 .info-grid {
@@ -854,6 +878,22 @@
   display: flex;
   gap: 2rem;
   padding-bottom: 0;
+  overflow-x: auto;
+  white-space: nowrap;
+  -webkit-overflow-scrolling: touch;
+}
+
+.tabs::-webkit-scrollbar {
+  height: 4px;
+}
+
+.tabs::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.tabs::-webkit-scrollbar-thumb {
+  background-color: var(--gray-300);
+  border-radius: 2px;
 }
 
 .tab-btn {
@@ -868,6 +908,7 @@
   transition: all 0.2s;
   font-family: inherit;
   white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .tab-btn:hover {
@@ -892,15 +933,22 @@
   margin-top: 1.5rem;
   min-height: 400px;
   height: auto;
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 .tab-pane {
   display: none;
   height: 100%;
+  flex: 1;
+  overflow: hidden;
 }
 
 .tab-pane.active {
-  display: block;
+  display: flex;
+  flex-direction: column;
 }
 
 .content-card {
@@ -909,11 +957,16 @@
   border: 1px solid var(--gray-200);
   overflow: hidden;
   box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06);
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
 .card-header {
   padding: 1rem 1.5rem;
   border-bottom: 1px solid var(--gray-200);
+  flex-shrink: 0;
 }
 
 .card-header-content {
@@ -939,9 +992,9 @@
 
 .card-body {
   padding: 1.5rem;
-  min-height: 300px;
-  height: auto;
-  overflow: visible;
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
 }
 
 .address-range {
@@ -1084,6 +1137,10 @@
   overflow-x: auto;
   background: white;
   border-radius: 0.5rem;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .table-actions {
@@ -1129,6 +1186,7 @@
   justify-content: center;
   padding: 3rem;
   text-align: center;
+  flex: 1;
 }
 
 .empty-data i {
@@ -1157,6 +1215,7 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
+  flex-shrink: 0;
 }
 
 .summary-info {
@@ -1189,6 +1248,7 @@
   justify-content: center;
   padding: 3rem;
   text-align: center;
+  flex: 1;
 }
 
 .loading-state .spinner {
@@ -1214,6 +1274,423 @@
   to {
     transform: rotate(360deg);
   }
+}
+
+.dhcp-installation-progress {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  background: linear-gradient(135deg, var(--gray-50) 0%, var(--primary-light) 100%);
+  padding: 2rem;
+  font-family: var(--font-family);
+}
+
+.installation-container {
+  background: white;
+  border-radius: 1rem;
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+  padding: 2.5rem;
+  max-width: 500px;
+  width: 100%;
+  text-align: center;
+  border: 1px solid var(--gray-200);
+}
+
+.installation-icon {
+  margin-bottom: 1.5rem;
+}
+
+.installation-icon i {
+  color: var(--primary-color);
+  font-size: 3rem;
+}
+
+.installation-container h2 {
+  font-size: 1.75rem;
+  font-weight: 700;
+  color: var(--gray-800);
+  margin-bottom: 1.5rem;
+}
+
+.progress-section {
+  background: var(--gray-50);
+  border-radius: 0.75rem;
+  padding: 1.5rem;
+  margin-bottom: 1.5rem;
+  border: 1px solid var(--gray-200);
+}
+
+.progress-message {
+  font-size: 1rem;
+  color: var(--gray-700);
+  margin-bottom: 1rem;
+  font-weight: 500;
+  text-align: left;
+}
+
+.progress-bar-container {
+  width: 100%;
+  margin-top: 1rem;
+}
+
+.progress-bar {
+  height: 8px;
+  background: var(--gray-200);
+  border-radius: 4px;
+  overflow: hidden;
+  margin-bottom: 0.5rem;
+}
+
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--primary-color), var(--primary-dark));
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+
+.progress-text {
+  font-size: 0.875rem;
+  color: var(--gray-600);
+  font-weight: 600;
+  text-align: right;
+}
+
+.installation-info {
+  text-align: left;
+  background: var(--info-light);
+  border: 1px solid var(--info-color);
+  border-radius: 0.75rem;
+  padding: 1.25rem;
+  margin-bottom: 1.5rem;
+}
+
+.installation-info p {
+  font-size: 0.875rem;
+  color: var(--gray-700);
+  margin: 0.5rem 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
+.installation-info p i {
+  color: var(--info-color);
+  margin-top: 0.125rem;
+}
+
+.navigation-note {
+  display: flex;
+  gap: 0.75rem;
+  background: var(--warning-light);
+  border: 1px solid var(--warning-color);
+  border-radius: 0.5rem;
+  padding: 1rem;
+  margin-top: 1rem;
+  text-align: left;
+}
+
+.navigation-note i {
+  color: var(--warning-color);
+  font-size: 1.25rem;
+  flex-shrink: 0;
+  margin-top: 0.125rem;
+}
+
+.navigation-note .note-title {
+  font-weight: 600;
+  color: var(--warning-color);
+  margin-bottom: 0.25rem;
+  font-size: 0.875rem;
+}
+
+.navigation-note p {
+  margin: 0;
+  color: var(--warning-color);
+  font-size: 0.875rem;
+  line-height: 1.4;
+}
+
+.dhcp-install-modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 1rem;
+  pointer-events: none;
+}
+
+.dhcp-install-modal {
+  background-color: white;
+  border-radius: 1rem;
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+  width: 100%;
+  max-width: 500px;
+  overflow: hidden;
+  border: 1px solid var(--gray-200);
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  pointer-events: auto;
+}
+
+.dhcp-install-modal .modal-header {
+  padding: 1.5rem;
+  border-bottom: 1px solid var(--gray-200);
+  background: linear-gradient(135deg, var(--primary-light) 0%, var(--primary-color) 100%);
+  flex-shrink: 0;
+}
+
+.dhcp-install-modal .modal-header h2 {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: white;
+  margin: 0;
+}
+
+.dhcp-install-modal .modal-content {
+  padding: 2rem;
+  text-align: center;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.warning-icon {
+  width: 80px;
+  height: 80px;
+  background: var(--warning-light);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 1.5rem;
+  border: 3px solid var(--warning-color);
+}
+
+.warning-icon i {
+  font-size: 2.5rem;
+  color: var(--warning-color);
+}
+
+.dhcp-install-modal .modal-content h3 {
+  font-size: 1.5rem;
+  font-weight: 600;
+  color: var(--gray-800);
+  margin-bottom: 1rem;
+}
+
+.dhcp-install-modal .modal-content p {
+  color: var(--gray-600);
+  margin-bottom: 1.5rem;
+  line-height: 1.5;
+  font-size: 1rem;
+}
+
+.warning-note {
+  background: var(--warning-light);
+  border: 1px solid var(--warning-color);
+  border-radius: 0.75rem;
+  padding: 1.25rem;
+  margin: 1.5rem 0;
+  text-align: left;
+  display: flex;
+  gap: 0.75rem;
+}
+
+.warning-note i {
+  color: var(--warning-color);
+  font-size: 1.25rem;
+  flex-shrink: 0;
+  margin-top: 0.125rem;
+}
+
+.warning-note .note-title {
+  font-weight: 600;
+  color: var(--warning-color);
+  margin-bottom: 0.25rem;
+  font-size: 0.875rem;
+}
+
+.warning-note p {
+  margin: 0;
+  color: var(--warning-color);
+  font-size: 0.875rem;
+  line-height: 1.4;
+}
+
+.connection-info {
+  text-align: left;
+  background: var(--gray-50);
+  border: 1px solid var(--gray-200);
+  border-radius: 0.75rem;
+  padding: 1.25rem;
+  margin-top: 1.5rem;
+}
+
+.connection-info h4 {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--gray-800);
+  margin-bottom: 1rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.connection-info h4::before {
+  content: "🔗";
+  font-size: 1rem;
+}
+
+.windows-connection-details {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.windows-connection-details p {
+  margin: 0;
+  font-size: 0.875rem;
+  color: var(--gray-700);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.windows-connection-details p strong {
+  color: var(--gray-800);
+  min-width: 120px;
+}
+
+.dhcp-install-modal .modal-footer {
+  padding: 1.5rem;
+  border-top: 1px solid var(--gray-200);
+  background-color: var(--gray-50);
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-shrink: 0;
+}
+
+.btn-primary, .btn-secondary {
+  padding: 0.75rem 1.5rem;
+  border-radius: 0.5rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  border: none;
+  transition: all 0.2s;
+  font-family: inherit;
+  min-width: 140px;
+  justify-content: center;
+}
+
+.btn-primary {
+  background: linear-gradient(135deg, var(--primary-color), var(--primary-dark));
+  color: white;
+}
+
+.btn-primary:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(22, 101, 52, 0.3);
+}
+
+.btn-primary:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+.btn-secondary {
+  background: white;
+  color: var(--gray-700);
+  border: 1px solid var(--gray-300);
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background: var(--gray-50);
+  border-color: var(--gray-400);
+}
+
+.btn-secondary:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.mini-spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: white;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  display: inline-block;
+}
+
+.dhcp-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  background: linear-gradient(135deg, var(--gray-50) 0%, var(--primary-light) 100%);
+  gap: 1.5rem;
+  text-align: center;
+  padding: 2rem;
+}
+
+.dhcp-loading .spinner {
+  width: 60px;
+  height: 60px;
+  border: 4px solid var(--gray-300);
+  border-top-color: var(--primary-color);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+.dhcp-loading p {
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--gray-800);
+  margin: 0;
+}
+
+.loading-subtext {
+  font-size: 0.875rem;
+  color: var(--gray-600);
+  font-weight: normal;
+  margin-top: 0.5rem;
+  max-width: 300px;
+  line-height: 1.5;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--gray-100);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--gray-300);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--gray-400);
 }
 
 @media (max-width: 1024px) {
@@ -1252,6 +1729,8 @@
   .top-bar-actions {
     width: 100%;
     justify-content: flex-start;
+    overflow-x: auto;
+    padding-bottom: 0.5rem;
   }
   
   .scope-actions {
@@ -1285,5 +1764,14 @@
   .data-table td {
     padding: 0.5rem 0.75rem;
     font-size: 0.75rem;
+  }
+  
+  .dhcp-install-modal .modal-footer {
+    flex-direction: column;
+  }
+  
+  .btn-primary, .btn-secondary {
+    width: 100%;
+    min-width: auto;
   }
 }

@@ -10,6 +10,7 @@ import db from "./config/db.js";
 dotenv.config({ path: path.resolve("backend/.env") });
 
 const app = express();
+const server_port = 5000;
 app.use(cors());
 app.use(express.json());
 
@@ -27,7 +28,7 @@ app.post("/api/send-command", async (req, res) => {
 
         console.log(`Forwarding command to WebSocket server: ${command} for user: ${username}`);
 
-        const response = await fetch('http://localhost:8081/api/send-command', {
+        const response = await fetch('http://my_ip:socket_port/api/send-command', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -82,7 +83,7 @@ app.get("/check-agent-status", async (req, res) => {
     };
 
     try {
-        ws = new WebSocket(`ws://localhost:8081/socket?token=${encodeURIComponent(token)}`);
+        ws = new WebSocket(`ws://my_ip:socket_port/socket?token=${encodeURIComponent(token)}`);
 
         connectionTimeout = setTimeout(() => {
             if (!responded) {
@@ -146,7 +147,7 @@ app.get("/api/agent-status", async (req, res) => {
     }
 
     try {
-        const response = await fetch('http://localhost:8081/api/agent-status', {
+        const response = await fetch('http://my_ip:socket_port/api/agent-status', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -221,6 +222,6 @@ app.get("/health", (req, res) => {
     });
 });
 
-app.listen(5000, () => {
-    console.log("Backend running on http://localhost:5000");
+app.listen(server_port, '0.0.0.0', () => {
+    console.log("Backend running on http://my_ip:server_port");
 });

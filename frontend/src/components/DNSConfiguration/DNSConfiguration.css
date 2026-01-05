@@ -1,4 +1,3 @@
-
 .dns-configuration {
   min-height: 100vh;
   background: linear-gradient(135deg, var(--gray-50) 0%, var(--primary-light) 100%);
@@ -1410,4 +1409,558 @@
     width: 100%;
     justify-content: center;
   }
+}
+
+.dns-installation-progress {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  background: linear-gradient(135deg, var(--gray-50) 0%, var(--primary-light) 100%);
+  padding: 2rem;
+  font-family: var(--font-family);
+}
+
+.dns-installation-progress .installation-container {
+  background: white;
+  border-radius: 1rem;
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+  padding: 2.5rem;
+  max-width: 500px;
+  width: 100%;
+  text-align: center;
+  border: 1px solid var(--gray-200);
+}
+
+.dns-installation-progress .installation-icon {
+  margin-bottom: 1.5rem;
+}
+
+.dns-installation-progress .installation-icon i {
+  color: var(--primary-color);
+  font-size: 3rem;
+}
+
+.dns-installation-progress .installation-container h2 {
+  font-size: 1.75rem;
+  font-weight: 700;
+  color: var(--gray-800);
+  margin-bottom: 1.5rem;
+}
+
+.dns-installation-progress .progress-section {
+  background: var(--gray-50);
+  border-radius: 0.75rem;
+  padding: 1.5rem;
+  margin-bottom: 1.5rem;
+  border: 1px solid var(--gray-200);
+}
+
+.dns-installation-progress .progress-message {
+  font-size: 1rem;
+  color: var(--gray-700);
+  margin-bottom: 1rem;
+  font-weight: 500;
+  text-align: left;
+}
+
+.dns-installation-progress .progress-bar-container {
+  width: 100%;
+  margin-top: 1rem;
+}
+
+.dns-installation-progress .progress-bar {
+  height: 8px;
+  background: var(--gray-200);
+  border-radius: 4px;
+  overflow: hidden;
+  margin-bottom: 0.5rem;
+}
+
+.dns-installation-progress .progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--primary-color), var(--primary-dark));
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+
+.dns-installation-progress .progress-text {
+  font-size: 0.875rem;
+  color: var(--gray-600);
+  font-weight: 600;
+  text-align: right;
+}
+
+.dns-installation-progress .installation-info {
+  text-align: left;
+  background: var(--info-light);
+  border: 1px solid var(--info-color);
+  border-radius: 0.75rem;
+  padding: 1.25rem;
+  margin-bottom: 1.5rem;
+}
+
+.dns-installation-progress .installation-info p {
+  font-size: 0.875rem;
+  color: var(--gray-700);
+  margin: 0.5rem 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
+.dns-installation-progress .installation-info p i {
+  color: var(--info-color);
+  margin-top: 0.125rem;
+}
+
+.dns-installation-progress .navigation-note {
+  display: flex;
+  gap: 0.75rem;
+  background: var(--warning-light);
+  border: 1px solid var(--warning-color);
+  border-radius: 0.5rem;
+  padding: 1rem;
+  margin-top: 1rem;
+  text-align: left;
+}
+
+.dns-installation-progress .navigation-note i {
+  color: var(--warning-color);
+  font-size: 1.25rem;
+  flex-shrink: 0;
+  margin-top: 0.125rem;
+}
+
+.dns-installation-progress .navigation-note .note-title {
+  font-weight: 600;
+  color: var(--warning-color);
+  margin-bottom: 0.25rem;
+  font-size: 0.875rem;
+}
+
+.dns-installation-progress .navigation-note p {
+  margin: 0;
+  color: var(--warning-color);
+  font-size: 0.875rem;
+  line-height: 1.4;
+}
+
+.dns-install-modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 1rem;
+  pointer-events: none;
+}
+
+.dns-install-modal {
+  background-color: white;
+  border-radius: 1rem;
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+  width: 100%;
+  max-width: 500px;
+  overflow: hidden;
+  border: 1px solid var(--gray-200);
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  pointer-events: auto;
+}
+
+.dns-install-modal .modal-header {
+  padding: 1.5rem;
+  border-bottom: 1px solid var(--gray-200);
+  background: linear-gradient(135deg, var(--primary-light) 0%, var(--primary-color) 100%);
+  flex-shrink: 0;
+}
+
+.dns-install-modal .modal-header h2 {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: white;
+  margin: 0;
+}
+
+.dns-install-modal .modal-content {
+  padding: 2rem;
+  text-align: center;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.dns-install-modal .warning-icon {
+  width: 80px;
+  height: 80px;
+  background: var(--warning-light);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 1.5rem;
+  border: 3px solid var(--warning-color);
+}
+
+.dns-install-modal .warning-icon i {
+  font-size: 2.5rem;
+  color: var(--warning-color);
+}
+
+.dns-install-modal .modal-content h3 {
+  font-size: 1.5rem;
+  font-weight: 600;
+  color: var(--gray-800);
+  margin-bottom: 1rem;
+}
+
+.dns-install-modal .modal-content p {
+  color: var(--gray-600);
+  margin-bottom: 1.5rem;
+  line-height: 1.5;
+  font-size: 1rem;
+}
+
+.dns-install-modal .warning-note {
+  background: var(--warning-light);
+  border: 1px solid var(--warning-color);
+  border-radius: 0.75rem;
+  padding: 1.25rem;
+  margin: 1.5rem 0;
+  text-align: left;
+  display: flex;
+  gap: 0.75rem;
+}
+
+.dns-install-modal .warning-note i {
+  color: var(--warning-color);
+  font-size: 1.25rem;
+  flex-shrink: 0;
+  margin-top: 0.125rem;
+}
+
+.dns-install-modal .warning-note .note-title {
+  font-weight: 600;
+  color: var(--warning-color);
+  margin-bottom: 0.25rem;
+  font-size: 0.875rem;
+}
+
+.dns-install-modal .warning-note p {
+  margin: 0;
+  color: var(--warning-color);
+  font-size: 0.875rem;
+  line-height: 1.4;
+}
+
+.dns-install-modal .connection-info {
+  text-align: left;
+  background: var(--gray-50);
+  border: 1px solid var(--gray-200);
+  border-radius: 0.75rem;
+  padding: 1.25rem;
+  margin-top: 1.5rem;
+}
+
+.dns-install-modal .connection-info h4 {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--gray-800);
+  margin-bottom: 1rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.dns-install-modal .connection-info h4::before {
+  content: "🔗";
+  font-size: 1rem;
+}
+
+.dns-install-modal .windows-connection-details {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.dns-install-modal .windows-connection-details p {
+  margin: 0;
+  font-size: 0.875rem;
+  color: var(--gray-700);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.dns-install-modal .windows-connection-details p strong {
+  color: var(--gray-800);
+  min-width: 120px;
+}
+
+.dns-install-modal .modal-footer {
+  padding: 1.5rem;
+  border-top: 1px solid var(--gray-200);
+  background-color: var(--gray-50);
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-shrink: 0;
+}
+
+.dns-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  background: linear-gradient(135deg, var(--gray-50) 0%, var(--primary-light) 100%);
+  padding: 2rem;
+  font-family: var(--font-family);
+  text-align: center;
+  gap: 1.5rem;
+}
+
+.dns-loading .spinner {
+  width: 60px;
+  height: 60px;
+  border: 4px solid var(--gray-300);
+  border-top-color: var(--primary-color);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+.dns-loading p {
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--gray-800);
+  margin: 0;
+}
+
+.dns-loading .loading-subtext {
+  font-size: 0.875rem;
+  color: var(--gray-600);
+  font-weight: normal;
+  margin-top: 0.5rem;
+  max-width: 300px;
+  line-height: 1.5;
+}
+
+.installation-progress {
+  text-align: center;
+  padding: 2rem 0;
+}
+
+.installation-progress h3 {
+  margin: var(--spacing-4) 0 var(--spacing-2) 0;
+  color: var(--gray-800);
+  font-size: 1.25rem;
+  font-weight: 600;
+}
+
+.installation-progress .progress-text {
+  color: var(--gray-600);
+  margin-bottom: var(--spacing-4);
+  font-size: 1rem;
+}
+
+.installation-progress .progress-bar {
+  height: 8px;
+  background: var(--gray-200);
+  border-radius: 4px;
+  overflow: hidden;
+  margin: var(--spacing-4) auto;
+  max-width: 300px;
+}
+
+.installation-progress .progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--primary-color), var(--primary-dark));
+  border-radius: 4px;
+  animation: progressFill 5s linear infinite;
+}
+
+@keyframes progressFill {
+  0% { width: 0%; }
+  100% { width: 100%; }
+}
+
+.windows-info-install {
+  background: var(--gray-50);
+  border: 1px solid var(--gray-200);
+  border-radius: 0.75rem;
+  padding: 1rem;
+  margin-top: 1.5rem;
+  text-align: left;
+}
+
+.windows-info-install p {
+  margin: 0.5rem 0;
+  font-size: 0.875rem;
+  color: var(--gray-700);
+}
+
+.windows-info-install p strong {
+  color: var(--gray-800);
+}
+
+.installation-success {
+  text-align: center;
+  padding: 2rem 0;
+}
+
+.installation-success .success-icon {
+  font-size: 4rem;
+  color: #10b981;
+  margin-bottom: 1rem;
+}
+
+.installation-success h3 {
+  margin: 0 0 var(--spacing-2) 0;
+  color: #065f46;
+  font-size: 1.5rem;
+  font-weight: 600;
+}
+
+.installation-success p {
+  color: var(--gray-600);
+  margin: 0 0 1.5rem 0;
+  font-size: 1rem;
+}
+
+.small-text {
+  font-size: 0.875rem;
+  color: var(--gray-500);
+  margin-top: 0.5rem;
+}
+
+.success-actions {
+  margin-top: 1.5rem;
+}
+
+.btn-ok {
+  background: linear-gradient(135deg, var(--primary-color), var(--primary-dark));
+  color: white;
+  border: none;
+  padding: 0.75rem 2rem;
+  border-radius: 0.5rem;
+  font-weight: 600;
+  font-size: 1rem;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.btn-ok:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(22, 101, 52, 0.3);
+}
+
+.dns-install-modal .btn-primary {
+  background: linear-gradient(135deg, var(--primary-color), var(--primary-dark));
+  color: white;
+  border: none;
+  padding: 0.75rem 1.5rem;
+  border-radius: 0.5rem;
+  font-weight: 600;
+  font-size: 0.875rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  transition: all 0.2s;
+  min-width: 140px;
+  justify-content: center;
+}
+
+.dns-install-modal .btn-primary:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(22, 101, 52, 0.3);
+}
+
+.dns-install-modal .btn-primary:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+.dns-install-modal .btn-secondary {
+  background: white;
+  color: var(--gray-700);
+  border: 1px solid var(--gray-300);
+  padding: 0.75rem 1.5rem;
+  border-radius: 0.5rem;
+  font-weight: 600;
+  font-size: 0.875rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  transition: all 0.2s;
+  min-width: 120px;
+  justify-content: center;
+}
+
+.dns-install-modal .btn-secondary:hover:not(:disabled) {
+  background: var(--gray-50);
+  border-color: var(--gray-400);
+}
+
+.dns-install-modal .btn-secondary:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.dns-install-modal .mini-spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: white;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  display: inline-block;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: var(--spacing-4);
+  pointer-events: auto;
+}
+
+.hamburger-menu, 
+.menu-overlay,
+.sidebar-menu,
+.nav-menu {
+  z-index: 1100 !important; 
+  position: relative;
+}
+
+.menu-toggle,
+.menu-button,
+.hamburger-button {
+  z-index: 1100 !important;
+  position: relative;
 }

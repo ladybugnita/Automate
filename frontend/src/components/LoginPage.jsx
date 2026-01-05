@@ -9,12 +9,25 @@ export default function LoginPage() {
     const [error, setError] = useState("");
     const [rememberMe, setRememberMe] = useState(false);
     const [showPassword, setShowPassword] = useState(false);
+    const [loading, setLoading] = useState(false);
     const navigate = useNavigate();
 
+    const API_URL = import.meta.env.VITE_API_URL || 'http://my_ip:server_port';
+
     useEffect(() => {
+        console.log("API URL:", API_URL);
+        
+        try {
+            new URL(API_URL);
+            console.log("URL is valid");
+        } catch (err) {
+            console.error("Invalid URL:", API_URL);
+            setError(`Invalid server URL: ${API_URL}. Please check configuration.`);
+        }
+        
         localStorage.removeItem('token');
         console.log('Cleared token on login page load');
-    }, []);
+    }, [API_URL]);
 
     useEffect(() => {
         const rememberedUser = localStorage.getItem("rememberedUser");
@@ -27,30 +40,58 @@ export default function LoginPage() {
     const handleLogin = async (e) => {
         e.preventDefault();
         setError("");
+        setLoading(true);
 
         if (!username || !password) {
             setError("Please fill in all fields");
+            setLoading(false);
             return;
         }
 
         try {
-            const res = await axios.post("http://localhost:5000/api/login", {
+            try {
+                new URL(API_URL);
+            } catch (err) {
+                throw new Error(`Invalid server URL: ${API_URL}`);
+            }
+
+            console.log("Attempting login to:", `${API_URL}/api/login`);
+            
+            const res = await axios.post(`${API_URL}/api/login`, {
                 username,
                 password,
+            }, {
+                timeout: 10000,
+                headers: {
+                    'Content-Type': 'application/json'
+                }
             });
 
+            console.log("Login successful, token received");
             const token = res.data.token;
             localStorage.setItem("token", token);
 
-            if (rememberMe) { localStorage.setItem("rememberedUser", username); }
-            else { localStorage.removeItem("rememberedUser"); }
+            if (rememberMe) { 
+                localStorage.setItem("rememberedUser", username); 
+            } else { 
+                localStorage.removeItem("rememberedUser"); 
+            }
 
             navigate("/token");
         } catch (err) {
-            console.error(err);
-            if (err.response && err.response.data?.error)
-                setError(err.response.data.error);
-            else setError("Login failed. Please try again.");
+            console.error("Login error:", err);
+            
+            if (err.message.includes('Invalid server URL')) {
+                setError(err.message);
+            } else if (err.response) {
+                setError(err.response.data?.error || `Login failed: ${err.response.status}`);
+            } else if (err.request) {
+                setError("Cannot connect to server. Please check if backend is running.");
+            } else {
+                setError(err.message || "Login failed. Please try again.");
+            }
+        } finally {
+            setLoading(false);
         }
     };
 
@@ -60,6 +101,9 @@ export default function LoginPage() {
             <div className="absolute top-2 left-0 right-0 bg-white py-4 px-6">
                 <div className="flex justify-between items-center">
                     <h1 className="text-2xl font-bold text-green-800">Automate</h1>
+                    <div className="text-sm text-gray-500">
+                        Server: {API_URL}
+                    </div>
                 </div>
             </div>
 
@@ -80,7 +124,8 @@ export default function LoginPage() {
                             placeholder="Username"
                             value={username}
                             onChange={(e) => setUsername(e.target.value)}
-                            className="w-full px-4 py-3 rounded-lg border border-gray-300 text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent transition" />
+                            className="w-full px-4 py-3 rounded-lg border border-gray-300 text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent transition"
+                            disabled={loading} />
                     </div>
 
                     <div>
@@ -91,12 +136,14 @@ export default function LoginPage() {
                                 placeholder="Password"
                                 value={password}
                                 onChange={(e) => setPassword(e.target.value)}
-                                className="w-full px-4 py-3 rounded-lg border border-gray-300 text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent transition pr-12" />
+                                className="w-full px-4 py-3 rounded-lg border border-gray-300 text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent transition pr-12"
+                                disabled={loading} />
 
                             <button
                                 type="button"
                                 onClick={() => setShowPassword(!showPassword)}
-                                className="absolute right-3 top-3 text-gray-400 hover:text-gray-600 transition">
+                                className="absolute right-3 top-3 text-gray-400 hover:text-gray-600 transition"
+                                disabled={loading}>
                                 {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
                             </button>
                         </div>
@@ -108,7 +155,8 @@ export default function LoginPage() {
                                 type="checkbox"
                                 checked={rememberMe}
                                 onChange={(e) => setRememberMe(e.target.checked)}
-                                className="h-4 w-4 text-green-600 rounded border-gray-300 focus:ring-green-500" />
+                                className="h-4 w-4 text-green-600 rounded border-gray-300 focus:ring-green-500"
+                                disabled={loading} />
                             Remember me
                         </label>
                         <Link
@@ -120,8 +168,17 @@ export default function LoginPage() {
 
                     <button
                         onClick={handleLogin}
-                        className="w-full bg-green-600 hover:bg-green-700 text-white py-3 rounded-lg font-semibold transition duration-200 shadow-md hover:shadow-lg">
-                        Login
+                        disabled={loading || !username || !password}
+                        className={`w-full ${loading ? 'bg-green-400' : 'bg-green-600 hover:bg-green-700'} text-white py-3 rounded-lg font-semibold transition duration-200 shadow-md hover:shadow-lg flex justify-center items-center`}>
+                        {loading ? (
+                            <>
+                                <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                </svg>
+                                Logging in...
+                            </>
+                        ) : "Login"}
                     </button>
                 </div>
 
