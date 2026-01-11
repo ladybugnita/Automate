@@ -13,6 +13,7 @@ import DNSConfiguration from "./components/DNSConfiguration/DNSConfiguration";
 import Routing from "./components/Routing/Routing";
 import DHCP from "./components/DHCP/DHCP";
 import ActiveDirectory from "./components/ActiveDirectory/ActiveDirectory";
+import ESXI from "./components/ESXI/ESXi";
 
 const ProtectedRoute = ({ children }) => {
   const token = localStorage.getItem("token");
@@ -79,10 +80,10 @@ function App() {
               </SidebarLayout>
             </ProtectedRoute>
           } />
-          <Route path="/wds" element={
+          <Route path="/esxi" element={
             <ProtectedRoute>
               <SidebarLayout>
-                <div>WDS Page - Coming Soon</div>
+                <ESXI />
               </SidebarLayout>
             </ProtectedRoute>
           } />

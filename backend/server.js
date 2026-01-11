@@ -3,18 +3,80 @@ import cors from "cors";
 import WebSocket from "ws";
 import dotenv from "dotenv";
 import path from "path";
+import { fileURLToPath } from "url"
 
-import authRoutes from "./routes/auth.js";
-import db from "./config/db.js";
+const _filename = fileURLToPath(import.meta.url);
+const _dirname = path.dirname(_filename);
+const socket_port = process.env.socket_port || 8081;
+const my_ip = process.env.my_ip || 'localhost';
 
-dotenv.config({ path: path.resolve("backend/.env") });
+dotenv.config({ path: path.join(_dirname, ".env") });
+
+console.log("Server starting...");
+console.log("Environment variables loaded from:", path.join(_dirname, ".env"));
 
 const app = express();
 const server_port = 5000;
 app.use(cors());
 app.use(express.json());
 
+app.use((req, res, next) => {
+    console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+    next();
+});
+
+console.log("Importing authRoutes...");
+let authRoutes;
+try {
+    const authModule = await import("./routes/auth.js");
+    authRoutes = authModule.default;
+    console.log("✓ authRoutes imported successfully");
+} catch (error) {
+    console.error("Error importing authRoutes:", error);
+    console.error("Error stack:", error.stack);
+    authRoutes = express.Router();
+    authRoutes.post("/login", (req, res) => {
+        res.status(500).json({ error: "Auth module failed to load" });
+    });
+    authRoutes.post("/signup", (req, res) => {
+        res.status(500).json({ error: "Auth module failed to load" });
+    });
+}
+
+console.log("Importing esxiRoutes...");
+let esxiRoutes;
+try {
+    const esxiModule = await import("./routes/esxiRoutes.js");
+    esxiRoutes = esxiModule.default;
+    console.log("✓ esxiRoutes imported successfully");
+} catch (error) {
+    console.error("Error importing esxiRoutes:", error);
+    console.error("Error stack:", error.stack);
+    esxiRoutes = express.Router();
+    esxiRoutes.post("/save-esxi", (req, res) => {
+        res.status(500).json({ error: "ESXi module failed to load" });
+    });
+}
+
+console.log("Importing db...");
+let db;
+try {
+    const dbModule = await import("./config/db.js");
+    db = dbModule.default;
+    console.log("✓ db imported successfully");
+} catch (error) {
+    console.error("Error importing db:", error);
+    console.error("Error stack:", error.stack);
+    db = {
+        query: async () => {
+            console.warn(" Using mock database - db import failed");
+            return [[]];
+        }
+    };
+}
+
 app.use("/api", authRoutes);
+app.use("/api", esxiRoutes);
 
 const persistentConnections = new Map();
 
@@ -83,7 +145,7 @@ app.get("/check-agent-status", async (req, res) => {
     };
 
     try {
-        ws = new WebSocket(`ws://my_ip:socket_port/socket?token=${encodeURIComponent(token)}`);
+        ws = new WebSocket(`ws://${my_ip}:${socket_port}/socket?token=${encodeURIComponent(token)}`);
 
         connectionTimeout = setTimeout(() => {
             if (!responded) {
@@ -218,7 +280,23 @@ app.get("/health", (req, res) => {
     res.json({
         status: "ok",
         message: "Backend server is running",
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        environment: process.env.NODE_ENV || "development"
+    });
+});
+
+app.use((err, req, res, next) => {
+    console.error('Server Error:', err.stack);
+    res.status(500).json({
+        error: 'Internal Server Error',
+        message: err.message
+    });
+});
+
+app.use((req, res) => {
+    res.status(404).json({
+        error: 'Not Found',
+        message: `Route ${req.method} ${req.url} not found`
     });
 });
 

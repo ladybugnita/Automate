@@ -101,9 +101,6 @@ export default function LoginPage() {
             <div className="absolute top-2 left-0 right-0 bg-white py-4 px-6">
                 <div className="flex justify-between items-center">
                     <h1 className="text-2xl font-bold text-green-800">Automate</h1>
-                    <div className="text-sm text-gray-500">
-                        Server: {API_URL}
-                    </div>
                 </div>
             </div>
 

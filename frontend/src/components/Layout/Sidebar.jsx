@@ -13,7 +13,7 @@ const Sidebar = ({ onItemClick }) => {
     { id: 'dhcp', label: 'DHCP', path: '/dhcp' },
     { id: 'users', label: 'Users', path: '/users' },
     { id: 'resource-monitor', label: 'Resource Monitor', path: '/resource-monitor' },
-    { id: 'wds', label: 'WDS', path: '/wds' },
+    { id: 'ESXi', label: 'ESXi', path: '/esxi' },
     { id: 'networking', label: 'Networking', path: '/networking' },
     { id: 'device-auto-config', label: 'Device Auto Config', path: '/device-auto-config' },
     { id: 'active-directory', label: 'Active Directory', path: '/active-directory' },

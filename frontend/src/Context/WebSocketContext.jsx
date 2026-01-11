@@ -32,7 +32,8 @@ const WebSocketProvider = ({ children }) => {
     dhcp: { status: INSTALLATION_STATUS.NOT_INSTALLED, progress: 0, message: '' },
     dns: { status: INSTALLATION_STATUS.NOT_INSTALLED, progress: 0, message: '' },
     ad: { status: INSTALLATION_STATUS.NOT_INSTALLED, progress: 0, message: '' },
-    wds: { status: INSTALLATION_STATUS.NOT_INSTALLED, progress: 0, message: '' }
+    wds: { status: INSTALLATION_STATUS.NOT_INSTALLED, progress: 0, message: '' },
+    esxi: { status: INSTALLATION_STATUS.NOT_INSTALLED, progress: 0, message: '' }
   });
 
   const listeners = useRef(new Set());
@@ -253,6 +254,387 @@ const WebSocketProvider = ({ children }) => {
     });
   }, [isConnected]);
 
+  const sendCommand = useCallback((command, payload = null) => {
+    if (!isConnected || !ws.current) {
+      console.error('WebSocket not connected, falling back to HTTP');
+      sendCommandViaHTTP(command, payload);
+      return Date.now().toString();
+    }
+
+    const commandData = {
+      command: command
+    };
+
+    if (payload) {
+      commandData.payload = payload;
+    }
+
+    console.log(`Sending command via WebSocket: ${command}`, payload ? `with payload: ${JSON.stringify(payload)}` : '');
+
+    try {
+      ws.current.send(JSON.stringify(commandData));
+      return Date.now().toString();
+    } catch (error) {
+      console.error('Error sending command via WebSocket, falling back to HTTP:', error);
+      sendCommandViaHTTP(command, payload);
+      return Date.now().toString();
+    }
+  }, [isConnected]);
+
+  const sendCommandViaHTTP = useCallback(async (command, payload = null) => {
+    try {
+      const username = getUsernameFromToken();
+      if (!username) {
+        console.error('No username found in token');
+        return null;
+      }
+      console.log(`Sending command via HTTP: ${command} for user: ${username}`);
+
+      const response = await fetch('http://my_ip:server_port/api/send-command', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          username: username,
+          command: command,
+          payload: payload
+        })
+      });
+
+      console.log(`HTTP Response status: ${response.status} ${response.statusText}`);
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const result = await response.json();
+      console.log(`HTTP Command response:`, result);
+
+      if (result.success) {
+        console.log(`Command sent successfully via HTTP: ${command}`);
+
+        if (result.result) {
+          const responseKey = `${command}_${Date.now()}`;
+          const httpResponse = {
+            ...result.result,
+            timestamp: Date.now(),
+            viaHttp: true
+          };
+
+          setCommandResponses(prev => ({
+            ...prev,
+            [responseKey]: httpResponse,
+            [command]: httpResponse
+          }));
+
+          return httpResponse;
+        }
+
+        return 'http-fallback';
+      } else {
+        console.error('Failed to send command via HTTP:', result.error);
+        throw new Error(result.error || 'HTTP command failed');
+      }
+    } catch (error) {
+      console.error('Error sending command via HTTP:', error);
+      throw error;
+    }
+  }, [getUsernameFromToken]);
+
+  const saveEsxiCredentials = useCallback(async (connectionData) => {
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) {
+        throw new Error('No authentication token found');
+      }
+
+      console.log('Saving ESXi credentials to database:', connectionData);
+
+      const response = await fetch('http://localhost:5000/api/save-validated-esxi', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          ip: connectionData.ip_address || connectionData.ip,
+          username: connectionData.username,
+          password: connectionData.password,
+          name: connectionData.connection_name,
+          validated: true
+
+        })
+      });
+
+      console.log('Save credentials response status:', response.status);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('API Error response:', errorText);
+        throw new Error(errorText || `HTTP error! status: ${response.status}`);
+      }
+
+      const result = await response.json();
+      console.log('Credentials saved successfully:', result);
+      return result;
+    } catch (error) {
+      console.error('Error saving ESXi credentials:', error);
+      throw error;
+    }
+  }, []);
+
+  const getSavedEsxiConnections = useCallback(async () => {
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) {
+        throw new Error('No authentication token found');
+      }
+
+      console.log('Fetching ESXi connections from database...');
+
+      const response = await fetch('http://localhost:5000/api/get-esxi-connections', {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+      }
+
+      const result = await response.json();
+      console.log('Retrieved ESXi connections:', result);
+      
+      const connections = result.connections || [];
+      return connections.map(conn => ({
+        id: conn.id?.toString() || `conn_${Date.now()}`,
+        name: conn.connection_name || `ESXi-${conn.ip_address}`,
+        ip: conn.ip_address,
+        username: conn.esxi_username,
+        status: conn.status || 'pending',
+        lastSeen: conn.last_seen || conn.updated_at,
+        created_at: conn.created_at,
+        updated_at: conn.updated_at,
+        installation_type: conn.installation_type
+      }));
+    } catch (error) {
+      console.error('Error fetching ESXi connections:', error);
+      return [];
+    }
+  }, []);
+
+  const getEsxiConnectionWithCredentials = useCallback(async (ip_address) => {
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) {
+        throw new Error('No authentication token found');
+      }
+
+      console.log(`Fetching ESXi connection with credentials for IP: ${ip_address}`);
+
+      const response = await fetch(`http://localhost:5000/api/get-esxi-connection/${ip_address}`, {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+      }
+
+      const result = await response.json();
+      return result.connection;
+    } catch (error) {
+      console.error('Error fetching ESXi connection with credentials:', error);
+      throw error;
+    }
+  }, []);
+
+  const updateEsxiConnectionStatus = useCallback(async (ip_address, status) => {
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) {
+        throw new Error('No authentication token found');
+      }
+
+      console.log(`Updating ESXi connection status for ${ip_address} to ${status}`);
+
+      const response = await fetch(`http://localhost:5000/api/update-status/${ip_address}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ status })
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+      }
+
+      const result = await response.json();
+      return result;
+    } catch (error) {
+      console.error('Error updating ESXi connection status:', error);
+      throw error;
+    }
+  }, []);
+
+  const deleteEsxiConnection = useCallback(async (ip_address) => {
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) {
+        throw new Error('No authentication token found');
+      }
+
+      console.log(`Deleting ESXi connection for IP: ${ip_address}`);
+
+      const response = await fetch(`http://localhost:5000/api/delete-esxi/${ip_address}`, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+      }
+
+      const result = await response.json();
+      return result;
+    } catch (error) {
+      console.error('Error deleting ESXi connection:', error);
+      throw error;
+    }
+  }, []);
+
+  const markEsxiAsInstalled = useCallback(async (ip_address) => {
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) {
+        throw new Error('No authentication token found');
+      }
+
+      console.log(`Marking ESXi connection as installed for IP: ${ip_address}`);
+
+      const response = await fetch(`http://localhost:5000/api/mark-installed/${ip_address}`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+      }
+
+      const result = await response.json();
+      return result;
+    } catch (error) {
+      console.error('Error marking ESXi as installed:', error);
+      throw error;
+    }
+  }, []);
+
+  const installEsxiWithSavedCredentials = useCallback(async (ip_address) => {
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) {
+        throw new Error('No authentication token found');
+      }
+
+      console.log(`Installing ESXi using saved credentials for IP: ${ip_address}`);
+
+      const credentialsResponse = await fetch(`http://localhost:5000/api/get-esxi-connection/${ip_address}`, {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+
+      if (!credentialsResponse.ok) {
+        throw new Error(`Failed to fetch credentials: ${credentialsResponse.status}`);
+      }
+
+      const credentialsData = await credentialsResponse.json();
+      const connection = credentialsData.connection;
+      
+      if (!connection) {
+        throw new Error('No saved credentials found for this ESXi host');
+      }
+
+      console.log(`Found saved credentials for ${ip_address}, sending install command...`);
+
+      await updateEsxiConnectionStatus(ip_address, 'installing');
+
+      const installResult = await sendCommandAsync('install_esxi', {
+        esxi_info: {
+          ip: connection.ip_address,
+          username: connection.esxi_username,
+          password: connection.esxi_password
+        }
+      });
+
+      if (installResult && installResult.success !== false) {
+        await markEsxiAsInstalled(ip_address);
+      }
+
+      return {
+        ...installResult,
+        connection_name: connection.connection_name,
+        ip_address: connection.ip_address
+      };
+    } catch (error) {
+      console.error('Error installing ESXi with saved credentials:', error);
+      // Update status to failed
+      await updateEsxiConnectionStatus(ip_address, 'failed').catch(() => {});
+      throw error;
+    }
+  }, [sendCommandAsync, updateEsxiConnectionStatus, markEsxiAsInstalled]);
+
+  // ==================== NEW FUNCTION: GET ESXI VM DETAILS ====================
+  const getEsxiVmDetails = useCallback(async (ip_address) => {
+    try {
+      console.log(`Fetching VM details for ESXi host: ${ip_address}`);
+      
+      // First, get the credentials from database
+      const connection = await getEsxiConnectionWithCredentials(ip_address);
+      
+      if (!connection) {
+        throw new Error(`No ESXi connection found for IP: ${ip_address}`);
+      }
+      
+      console.log('Found ESXi connection:', {
+        ip: connection.ip_address,
+        username: connection.username,
+        password: connection.password ? '***' : 'MISSING'
+      });
+      
+      // Send get_vm_details command via WebSocket
+      const vmDetailsResponse = await sendCommandAsync('get_vm_details', {
+        esxi_info: {
+          ip: connection.ip_address,
+          username: connection.username,
+          password: connection.password
+        }
+      });
+      
+      console.log('VM details response:', vmDetailsResponse);
+      return vmDetailsResponse;
+      
+    } catch (error) {
+      console.error('Error fetching VM details:', error);
+      throw error;
+    }
+  }, [getEsxiConnectionWithCredentials, sendCommandAsync]);
+
+  // ==================== SERVICE FUNCTIONS ====================
+
   const checkServiceInstalled = useCallback(async (service) => {
     console.log(`Checking if ${service} is installed...`);
     
@@ -354,6 +736,7 @@ const WebSocketProvider = ({ children }) => {
       updateInstallationStatus(service, INSTALLATION_STATUS.FAILED, 0, error.message);
     }
   }, [sendCommandAsync, updateInstallationStatus, simulateInstallationProgress]);
+
 
   const connectWebSocket = useCallback(async () => {
     if (isConnectingRef.current) {
@@ -496,6 +879,29 @@ const WebSocketProvider = ({ children }) => {
               }
             }
 
+            if (command === 'install_esxi') {
+              const success = data.data && (
+                (typeof data.data === 'string' && data.data.toLowerCase().includes('installation done')) ||
+                (typeof data.data === 'object' && data.data.success === true)
+              );
+              
+              if (success) {
+                updateInstallationStatus(
+                  'esxi',
+                  INSTALLATION_STATUS.INSTALLED,
+                  100,
+                  'ESXi installed successfully!'
+                );
+              } else {
+                updateInstallationStatus(
+                  'esxi',
+                  INSTALLATION_STATUS.FAILED,
+                  0,
+                  'ESXi installation failed'
+                );
+              }
+            }
+
             const responseWithTimestamp = {
               ...data.data,
               timestamp: Date.now(),
@@ -603,93 +1009,6 @@ const WebSocketProvider = ({ children }) => {
     }
   }, [isValidToken, reconnectAttempts, scheduleReconnect, shouldAutoConnect, flushMessageQueue, updateInstallationStatus]);
 
-  const sendCommand = useCallback((command, payload = null) => {
-    if (!isConnected || !ws.current) {
-      console.error('WebSocket not connected, falling back to HTTP');
-      sendCommandViaHTTP(command, payload);
-      return Date.now().toString();
-    }
-
-    const commandData = {
-      command: command
-    };
-
-    if (payload) {
-      commandData.payload = payload;
-    }
-
-    console.log(`Sending command via WebSocket: ${command}`, payload ? `with payload: ${JSON.stringify(payload)}` : '');
-
-    try {
-      ws.current.send(JSON.stringify(commandData));
-      return Date.now().toString();
-    } catch (error) {
-      console.error('Error sending command via WebSocket, falling back to HTTP:', error);
-      sendCommandViaHTTP(command, payload);
-      return Date.now().toString();
-    }
-  }, [isConnected]);
-
-  const sendCommandViaHTTP = useCallback(async (command, payload = null) => {
-    try {
-      const username = getUsernameFromToken();
-      if (!username) {
-        console.error('No username found in token');
-        return null;
-      }
-      console.log(`Sending command via HTTP: ${command} for user: ${username}`);
-
-      const response = await fetch('http://my_ip:server_port/api/send-command', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          username: username,
-          command: command,
-          payload: payload
-        })
-      });
-
-      console.log(`HTTP Response status: ${response.status} ${response.statusText}`);
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-
-      const result = await response.json();
-      console.log(`HTTP Command response:`, result);
-
-      if (result.success) {
-        console.log(`Command sent successfully via HTTP: ${command}`);
-
-        if (result.result) {
-          const responseKey = `${command}_${Date.now()}`;
-          const httpResponse = {
-            ...result.result,
-            timestamp: Date.now(),
-            viaHttp: true
-          };
-
-          setCommandResponses(prev => ({
-            ...prev,
-            [responseKey]: httpResponse,
-            [command]: httpResponse
-          }));
-
-          return httpResponse;
-        }
-
-        return 'http-fallback';
-      } else {
-        console.error('Failed to send command via HTTP:', result.error);
-        throw new Error(result.error || 'HTTP command failed');
-      }
-    } catch (error) {
-      console.error('Error sending command via HTTP:', error);
-      throw error;
-    }
-  }, [getUsernameFromToken]);
 
   const startConnection = useCallback(() => {
     console.log('Manual WebSocket connection started');
@@ -739,46 +1058,6 @@ const WebSocketProvider = ({ children }) => {
     
     return matchingResponses.length > 0 ? matchingResponses[0][1] : null;
   }, [commandResponses]);
-
-  useEffect(() => {
-    const cleanupInterval = setInterval(() => {
-      const now = Date.now();
-      
-      setCommandResponses(prev => {
-        const newResponses = {};
-        Object.entries(prev).forEach(([key, value]) => {
-          if (value.timestamp && now - value.timestamp < 300000) { 
-            newResponses[key] = value;
-          } else if (!value.timestamp) {
-            newResponses[key] = value;
-          }
-        });
-        console.log(`Cleaned responses. Keeping ${Object.keys(newResponses).length} responses`);
-        return newResponses;
-      });
-      
-      pendingRequests.current.forEach((request, requestId) => {
-        if (now - request.timestamp > 35000) {
-          if (request.reject) {
-            request.reject(new Error(`Request timeout: ${request.command}`));
-          }
-          pendingRequests.current.delete(requestId);
-        }
-      });
-      
-      messageQueue.current = messageQueue.current.filter(item => {
-        const timestampMatch = item.requestId.match(/_(\d+)$/);
-        if (timestampMatch) {
-          const itemTime = parseInt(timestampMatch[1]);
-          return now - itemTime < 60000;
-        }
-        return true; 
-      });
-      
-    }, 10000);
-
-    return () => clearInterval(cleanupInterval);
-  }, []);
 
   const refreshAgentStatus = useCallback(async () => {
     const token = localStorage.getItem('token');
@@ -847,6 +1126,47 @@ const WebSocketProvider = ({ children }) => {
     return testWs;
   }, []);
 
+
+  useEffect(() => {
+    const cleanupInterval = setInterval(() => {
+      const now = Date.now();
+      
+      setCommandResponses(prev => {
+        const newResponses = {};
+        Object.entries(prev).forEach(([key, value]) => {
+          if (value.timestamp && now - value.timestamp < 300000) { 
+            newResponses[key] = value;
+          } else if (!value.timestamp) {
+            newResponses[key] = value;
+          }
+        });
+        console.log(`Cleaned responses. Keeping ${Object.keys(newResponses).length} responses`);
+        return newResponses;
+      });
+      
+      pendingRequests.current.forEach((request, requestId) => {
+        if (now - request.timestamp > 35000) {
+          if (request.reject) {
+            request.reject(new Error(`Request timeout: ${request.command}`));
+          }
+          pendingRequests.current.delete(requestId);
+        }
+      });
+      
+      messageQueue.current = messageQueue.current.filter(item => {
+        const timestampMatch = item.requestId.match(/_(\d+)$/);
+        if (timestampMatch) {
+          const itemTime = parseInt(timestampMatch[1]);
+          return now - itemTime < 60000;
+        }
+        return true; 
+      });
+      
+    }, 10000);
+
+    return () => clearInterval(cleanupInterval);
+  }, []);
+
   useEffect(() => {
     const token = localStorage.getItem('token');
 
@@ -875,6 +1195,7 @@ const WebSocketProvider = ({ children }) => {
     };
   }, [connectWebSocket, isValidToken, shouldAutoConnect]);
 
+
   const value = {
     sendCommand, 
     sendCommandAsync, 
@@ -887,7 +1208,7 @@ const WebSocketProvider = ({ children }) => {
     getCommandResponse,
     commandResponses,
     startConnection,
-    stopConnection,
+    stopConnection, 
     agentStatus,
     refreshAgentStatus,
     checkAgentStatus,
@@ -900,7 +1221,18 @@ const WebSocketProvider = ({ children }) => {
     INSTALLATION_STATUS,
     checkServiceInstalled,
     startServiceInstallation,
-    updateInstallationStatus
+    updateInstallationStatus,
+    
+    saveEsxiCredentials,
+    getSavedEsxiConnections,
+    getEsxiConnectionWithCredentials,
+    updateEsxiConnectionStatus,
+    deleteEsxiConnection,
+    markEsxiAsInstalled,
+    installEsxiWithSavedCredentials,
+    
+    // Add the new function to the context value
+    getEsxiVmDetails
   };
 
   return (
