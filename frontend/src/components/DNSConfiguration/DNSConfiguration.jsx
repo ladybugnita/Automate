@@ -31,7 +31,7 @@ function DNSConfiguration() {
   const [installProgress, setInstallProgress] = useState('');
   const [installSuccess, setInstallSuccess] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const [checkingStatus, setCheckingStatus] = useState(true); // Start with checking true
+  const [checkingStatus, setCheckingStatus] = useState(true); 
   
   const [newZoneData, setNewZoneData] = useState({
     zoneName: '',
@@ -58,7 +58,7 @@ function DNSConfiguration() {
 
   const navItems = [
     'Dashboard', 'DNS Configuration', 'Event Viewer', 'DHCP', 'Users', 
-    'Resource Monitor', 'WDS', 'Networking', 'Device Auto Config', 
+    'Resource Monitor', 'WDS', 'Networking', 'Machine Management', 
     'Active Directory', 'Routing'
   ];
 

@@ -13,6 +13,7 @@ import DNSConfiguration from "./components/DNSConfiguration/DNSConfiguration";
 import Routing from "./components/Routing/Routing";
 import DHCP from "./components/DHCP/DHCP";
 import ActiveDirectory from "./components/ActiveDirectory/ActiveDirectory";
+import MachineManagement from "./components/MachineManagement/MachineManagement";
 import ESXI from "./components/ESXI/ESXi";
 
 const ProtectedRoute = ({ children }) => {
@@ -94,10 +95,10 @@ function App() {
               </SidebarLayout>
             </ProtectedRoute>
           } />
-          <Route path="/device-auto-config" element={
+          <Route path="/machine-management" element={
             <ProtectedRoute>
               <SidebarLayout>
-                <div>Device Auto config Page - Coming Soon</div>
+                <MachineManagement />
               </SidebarLayout>
             </ProtectedRoute>
           } />

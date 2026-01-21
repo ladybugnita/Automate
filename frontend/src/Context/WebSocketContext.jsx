@@ -18,6 +18,24 @@ export const useWebSocket = () => {
   return context;
 };
 
+const getApiBaseUrl = () => {
+  if (typeof window !== 'undefined') {
+    const currentHost = window.location.hostname;
+    const currentPort = window.location.port;
+    
+    if (currentHost === 'localhost' || currentHost === '127.0.0.1') {
+      return `http://${currentHost}:5000`;
+    } else {
+      return `http://${currentHost}:5000`;
+    }
+  }
+  
+  return 'http://localhost:5000';
+};
+
+const API_BASE_URL = getApiBaseUrl();
+console.log('API Base URL:', API_BASE_URL);
+
 const WebSocketProvider = ({ children }) => {
   const ws = useRef(null);
   const [isConnected, setIsConnected] = useState(false);
@@ -48,7 +66,7 @@ const WebSocketProvider = ({ children }) => {
   const checkAgentStatus = useCallback(async (token) => {
     try {
       console.log('Checking agent status via HTTP...');
-      const response = await fetch(`http://my_ip:server_port/api/agent-status?token=${token}`);
+      const response = await fetch(`${API_BASE_URL}/api/agent-status?token=${token}`);
 
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
@@ -80,6 +98,10 @@ const WebSocketProvider = ({ children }) => {
       console.error('Error decoding token:', error);
       return null;
     }
+  }, []);
+
+  const getToken = useCallback(() => {
+    return localStorage.getItem('token');
   }, []);
 
   const scheduleReconnect = useCallback(() => {
@@ -173,13 +195,20 @@ const WebSocketProvider = ({ children }) => {
         }
       }, timeout);
 
-      const commandData = {
-        command: command
-      };
-
-      if (payload) {
-        commandData.payload = payload;
+      let finalPayload = payload;
+      if (command === 'create_datastore' && payload) {
+        finalPayload = {
+          esxi_info: payload.esxi_info,
+          datastore_name: payload.datastore_name,
+          datastore_size: payload.datastore_size || payload.capacity || '50GB' 
+        };
+        console.log('Modified create_datastore payload:', finalPayload);
       }
+
+      const commandData = {
+        command: command,
+        ...(finalPayload && { payload: finalPayload })
+      };
 
       console.log(`Sending command: ${command}`, payload ? `with payload: ${JSON.stringify(payload)}` : '');
 
@@ -205,7 +234,7 @@ const WebSocketProvider = ({ children }) => {
           pendingRequests.current.delete(requestId);
           clearTimeout(timeoutId);
           
-          sendCommandViaHTTP(command, payload)
+          sendCommandViaHTTP(command, finalPayload)
             .then(httpResult => {
               if (httpResult) {
                 resolve({
@@ -235,7 +264,7 @@ const WebSocketProvider = ({ children }) => {
           }
         });
         
-        sendCommandViaHTTP(command, payload)
+        sendCommandViaHTTP(command, finalPayload)
           .then(httpResult => {
             if (httpResult && httpResult !== 'http-fallback') {
               clearTimeout(timeoutId);
@@ -261,22 +290,31 @@ const WebSocketProvider = ({ children }) => {
       return Date.now().toString();
     }
 
+    let finalPayload = payload;
+    if (command === 'create_datastore' && payload) {
+      finalPayload = {
+        esxi_info: payload.esxi_info,
+        datastore_name: payload.datastore_name,
+        datastore_size: payload.datastore_size || payload.capacity || '50GB'
+      };
+    }
+
     const commandData = {
       command: command
     };
 
-    if (payload) {
-      commandData.payload = payload;
+    if (finalPayload) {
+      commandData.payload = finalPayload;
     }
 
-    console.log(`Sending command via WebSocket: ${command}`, payload ? `with payload: ${JSON.stringify(payload)}` : '');
+    console.log(`Sending command via WebSocket: ${command}`, finalPayload ? `with payload: ${JSON.stringify(finalPayload)}` : '');
 
     try {
       ws.current.send(JSON.stringify(commandData));
       return Date.now().toString();
     } catch (error) {
       console.error('Error sending command via WebSocket, falling back to HTTP:', error);
-      sendCommandViaHTTP(command, payload);
+      sendCommandViaHTTP(command, finalPayload);
       return Date.now().toString();
     }
   }, [isConnected]);
@@ -290,7 +328,7 @@ const WebSocketProvider = ({ children }) => {
       }
       console.log(`Sending command via HTTP: ${command} for user: ${username}`);
 
-      const response = await fetch('http://my_ip:server_port/api/send-command', {
+      const response = await fetch(`${API_BASE_URL}/api/send-command`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -344,56 +382,67 @@ const WebSocketProvider = ({ children }) => {
 
   const saveEsxiCredentials = useCallback(async (connectionData) => {
     try {
-      const token = localStorage.getItem('token');
+      const token = getToken();
       if (!token) {
         throw new Error('No authentication token found');
       }
 
-      console.log('Saving ESXi credentials to database:', connectionData);
+      console.log('Saving ESXi host to database:', {
+        ...connectionData,
+        password: connectionData.password ? '***' : 'MISSING'
+      });
 
-      const response = await fetch('http://localhost:5000/api/save-validated-esxi', {
+      const response = await fetch(`${API_BASE_URL}/api/esxi/save-esxi-host`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({
-          ip: connectionData.ip_address || connectionData.ip,
-          username: connectionData.username,
+          connection_name: connectionData.connection_name || connectionData.connectionName,
+          host_ip: connectionData.host_ip || connectionData.ip,
+          username: connectionData.username || 'root',
           password: connectionData.password,
-          name: connectionData.connection_name,
-          validated: true
-
+          installation_type: connectionData.installation_type || 'existing',
+          status: connectionData.status || 'pending'
         })
       });
 
-      console.log('Save credentials response status:', response.status);
+      console.log('Save ESXi host response status:', response.status);
 
       if (!response.ok) {
-        const errorText = await response.text();
-        console.error('API Error response:', errorText);
-        throw new Error(errorText || `HTTP error! status: ${response.status}`);
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
       }
 
       const result = await response.json();
-      console.log('Credentials saved successfully:', result);
+      console.log('ESXi host saved successfully:', {
+        success: result.success,
+        data: result.data ? {
+          id: result.data.id,
+          connection_name: result.data.connection_name,
+          hasPassword: !!result.data.password
+        } : 'No data'
+      });
+      
       return result;
     } catch (error) {
       console.error('Error saving ESXi credentials:', error);
       throw error;
     }
-  }, []);
+  }, [getToken]);
 
-  const getSavedEsxiConnections = useCallback(async () => {
+  const getSavedEsxiConnections = useCallback(async (includePassword = true) => {
     try {
-      const token = localStorage.getItem('token');
+      const token = getToken();
       if (!token) {
         throw new Error('No authentication token found');
       }
 
-      console.log('Fetching ESXi connections from database...');
+      console.log('Fetching ESXi hosts from database...');
 
-      const response = await fetch('http://localhost:5000/api/get-esxi-connections', {
+      const url = `${API_BASE_URL}/api/esxi/get-esxi-connections${includePassword ? '?include_password=true' : ''}`;
+      const response = await fetch(url, {
         headers: {
           'Authorization': `Bearer ${token}`
         }
@@ -405,36 +454,44 @@ const WebSocketProvider = ({ children }) => {
       }
 
       const result = await response.json();
-      console.log('Retrieved ESXi connections:', result);
+      console.log('Retrieved ESXi connections:', result.connections ? result.connections.length : 0, 'connections');
       
-      const connections = result.connections || [];
+      const connections = result.connections || []; 
       return connections.map(conn => ({
-        id: conn.id?.toString() || `conn_${Date.now()}`,
-        name: conn.connection_name || `ESXi-${conn.ip_address}`,
-        ip: conn.ip_address,
-        username: conn.esxi_username,
+        id: conn.id?.toString() || `host_${Date.now()}`,
+        connection_id: conn.id,
+        name: conn.connection_name || `ESXi-${conn.host_ip || conn.ip_address}`,
+        connection_name: conn.connection_name,
+        ip: conn.host_ip || conn.ip_address,
+        host_ip: conn.host_ip || conn.ip_address,
+        username: conn.username || 'root',
+        password: conn.password || '', 
         status: conn.status || 'pending',
+        installation_type: conn.installation_type,
+        vms: conn.vms || [],
+        datastores: conn.datastores || [],
+        host_info: conn.host_info,
         lastSeen: conn.last_seen || conn.updated_at,
         created_at: conn.created_at,
         updated_at: conn.updated_at,
-        installation_type: conn.installation_type
+        hasCompleteCredentials: !!(conn.host_ip || conn.ip_address) && !!(conn.username) && !!(conn.password)
       }));
     } catch (error) {
       console.error('Error fetching ESXi connections:', error);
       return [];
     }
-  }, []);
+  }, [getToken]);
 
-  const getEsxiConnectionWithCredentials = useCallback(async (ip_address) => {
+  const getEsxiConnectionWithCredentials = useCallback(async (host_id) => {
     try {
-      const token = localStorage.getItem('token');
+      const token = getToken();
       if (!token) {
         throw new Error('No authentication token found');
       }
 
-      console.log(`Fetching ESXi connection with credentials for IP: ${ip_address}`);
+      console.log(`Fetching ESXi host with credentials for ID: ${host_id}`);
 
-      const response = await fetch(`http://localhost:5000/api/get-esxi-connection/${ip_address}`, {
+      const response = await fetch(`${API_BASE_URL}/api/esxi/get-esxi-host-with-password/${host_id}`, {
         headers: {
           'Authorization': `Bearer ${token}`
         }
@@ -446,23 +503,58 @@ const WebSocketProvider = ({ children }) => {
       }
 
       const result = await response.json();
-      return result.connection;
+      console.log('Retrieved ESXi host with credentials:', {
+        id: result.host?.id,
+        ip: result.host?.host_ip,
+        hasPassword: !!result.host?.password
+      });
+      
+      return result.host; 
     } catch (error) {
-      console.error('Error fetching ESXi connection with credentials:', error);
+      console.error('Error fetching ESXi host with credentials:', error);
       throw error;
     }
-  }, []);
+  }, [getToken]);
 
-  const updateEsxiConnectionStatus = useCallback(async (ip_address, status) => {
+  const getEsxiHostById = useCallback(async (host_id, include_password = false) => {
     try {
-      const token = localStorage.getItem('token');
+      const token = getToken();
       if (!token) {
         throw new Error('No authentication token found');
       }
 
-      console.log(`Updating ESXi connection status for ${ip_address} to ${status}`);
+      console.log(`Fetching ESXi host by ID: ${host_id}, include_password: ${include_password}`);
 
-      const response = await fetch(`http://localhost:5000/api/update-status/${ip_address}`, {
+      const url = `${API_BASE_URL}/api/esxi/get-esxi-host/${host_id}${include_password ? '?include_password=true' : ''}`;
+      const response = await fetch(url, {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+      }
+
+      const result = await response.json();
+      return result.host;
+    } catch (error) {
+      console.error('Error fetching ESXi host by ID:', error);
+      throw error;
+    }
+  }, [getToken]);
+
+  const updateEsxiConnectionStatus = useCallback(async (host_id, status) => {
+    try {
+      const token = getToken();
+      if (!token) {
+        throw new Error('No authentication token found');
+      }
+
+      console.log(`Updating ESXi host status for ID ${host_id} to ${status}`);
+
+      const response = await fetch(`${API_BASE_URL}/api/esxi/update-host-status/${host_id}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -479,21 +571,21 @@ const WebSocketProvider = ({ children }) => {
       const result = await response.json();
       return result;
     } catch (error) {
-      console.error('Error updating ESXi connection status:', error);
+      console.error('Error updating ESXi host status:', error);
       throw error;
     }
-  }, []);
+  }, [getToken]);
 
-  const deleteEsxiConnection = useCallback(async (ip_address) => {
+  const deleteEsxiConnection = useCallback(async (host_id) => {
     try {
-      const token = localStorage.getItem('token');
+      const token = getToken();
       if (!token) {
         throw new Error('No authentication token found');
       }
 
-      console.log(`Deleting ESXi connection for IP: ${ip_address}`);
+      console.log(`Deleting ESXi host with ID: ${host_id}`);
 
-      const response = await fetch(`http://localhost:5000/api/delete-esxi/${ip_address}`, {
+      const response = await fetch(`${API_BASE_URL}/api/esxi/delete-esxi-host/${host_id}`, {
         method: 'DELETE',
         headers: {
           'Authorization': `Bearer ${token}`
@@ -508,21 +600,21 @@ const WebSocketProvider = ({ children }) => {
       const result = await response.json();
       return result;
     } catch (error) {
-      console.error('Error deleting ESXi connection:', error);
+      console.error('Error deleting ESXi host:', error);
       throw error;
     }
-  }, []);
+  }, [getToken]);
 
-  const markEsxiAsInstalled = useCallback(async (ip_address) => {
+  const markEsxiAsInstalled = useCallback(async (host_id) => {
     try {
-      const token = localStorage.getItem('token');
+      const token = getToken();
       if (!token) {
         throw new Error('No authentication token found');
       }
 
-      console.log(`Marking ESXi connection as installed for IP: ${ip_address}`);
+      console.log(`Marking ESXi host as installed for ID: ${host_id}`);
 
-      const response = await fetch(`http://localhost:5000/api/mark-installed/${ip_address}`, {
+      const response = await fetch(`${API_BASE_URL}/api/esxi/mark-host-installed/${host_id}`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`
@@ -540,100 +632,93 @@ const WebSocketProvider = ({ children }) => {
       console.error('Error marking ESXi as installed:', error);
       throw error;
     }
-  }, []);
+  }, [getToken]);
 
-  const installEsxiWithSavedCredentials = useCallback(async (ip_address) => {
+  const installEsxiWithSavedCredentials = useCallback(async (host_id) => {
     try {
-      const token = localStorage.getItem('token');
+      const token = getToken();
       if (!token) {
         throw new Error('No authentication token found');
       }
 
-      console.log(`Installing ESXi using saved credentials for IP: ${ip_address}`);
+      console.log(`Installing ESXi using saved credentials for host ID: ${host_id}`);
 
-      const credentialsResponse = await fetch(`http://localhost:5000/api/get-esxi-connection/${ip_address}`, {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
-
-      if (!credentialsResponse.ok) {
-        throw new Error(`Failed to fetch credentials: ${credentialsResponse.status}`);
-      }
-
-      const credentialsData = await credentialsResponse.json();
-      const connection = credentialsData.connection;
+      const host = await getEsxiConnectionWithCredentials(host_id);
       
-      if (!connection) {
+      if (!host) {
         throw new Error('No saved credentials found for this ESXi host');
       }
 
-      console.log(`Found saved credentials for ${ip_address}, sending install command...`);
+      console.log(`Found saved credentials for ${host.host_ip}, sending install command...`);
 
-      await updateEsxiConnectionStatus(ip_address, 'installing');
+      await updateEsxiConnectionStatus(host_id, 'installing');
 
       const installResult = await sendCommandAsync('install_esxi', {
         esxi_info: {
-          ip: connection.ip_address,
-          username: connection.esxi_username,
-          password: connection.esxi_password
-        }
+          ip: host.host_ip, 
+          username: host.username, 
+          password: host.password 
+        },
+        connection_name: host.connection_name || `ESXi-${host.host_ip}`
       });
 
       if (installResult && installResult.success !== false) {
-        await markEsxiAsInstalled(ip_address);
+        await markEsxiAsInstalled(host_id);
       }
 
       return {
         ...installResult,
-        connection_name: connection.connection_name,
-        ip_address: connection.ip_address
+        connection_name: host.connection_name,
+        host_ip: host.host_ip 
       };
     } catch (error) {
       console.error('Error installing ESXi with saved credentials:', error);
-      // Update status to failed
-      await updateEsxiConnectionStatus(ip_address, 'failed').catch(() => {});
+      await updateEsxiConnectionStatus(host_id, 'failed').catch(() => {});
       throw error;
     }
-  }, [sendCommandAsync, updateEsxiConnectionStatus, markEsxiAsInstalled]);
+  }, [sendCommandAsync, updateEsxiConnectionStatus, markEsxiAsInstalled, getEsxiConnectionWithCredentials, getToken]);
 
-  // ==================== NEW FUNCTION: GET ESXI VM DETAILS ====================
-  const getEsxiVmDetails = useCallback(async (ip_address) => {
+  const getEsxiVmDetails = useCallback(async (host_id) => {
     try {
-      console.log(`Fetching VM details for ESXi host: ${ip_address}`);
+      console.log(`Fetching VM details for ESXi host ID: ${host_id}`);
       
-      // First, get the credentials from database
-      const connection = await getEsxiConnectionWithCredentials(ip_address);
+      const token = getToken();
+      if (!token) {
+        throw new Error('No authentication token found');
+      }
+
+      const host = await getEsxiConnectionWithCredentials(host_id);
       
-      if (!connection) {
-        throw new Error(`No ESXi connection found for IP: ${ip_address}`);
+      if (!host) {
+        throw new Error(`No ESXi host found for ID: ${host_id}`);
       }
       
-      console.log('Found ESXi connection:', {
-        ip: connection.ip_address,
-        username: connection.username,
-        password: connection.password ? '***' : 'MISSING'
+      if (!host.password) {
+        throw new Error(`No password found for ESXi host: ${host.host_ip}`);
+      }
+      
+      console.log('Found ESXi host:', {
+        host_ip: host.host_ip,
+        username: host.username,
+        password: '***' 
       });
       
-      // Send get_vm_details command via WebSocket
       const vmDetailsResponse = await sendCommandAsync('get_vm_details', {
         esxi_info: {
-          ip: connection.ip_address,
-          username: connection.username,
-          password: connection.password
+          ip: host.host_ip, 
+          username: host.username, 
+          password: host.password
         }
       });
       
-      console.log('VM details response:', vmDetailsResponse);
+      console.log('VM details response received');
       return vmDetailsResponse;
       
     } catch (error) {
       console.error('Error fetching VM details:', error);
       throw error;
     }
-  }, [getEsxiConnectionWithCredentials, sendCommandAsync]);
-
-  // ==================== SERVICE FUNCTIONS ====================
+  }, [sendCommandAsync, getEsxiConnectionWithCredentials, getToken]);
 
   const checkServiceInstalled = useCallback(async (service) => {
     console.log(`Checking if ${service} is installed...`);
@@ -737,7 +822,6 @@ const WebSocketProvider = ({ children }) => {
     }
   }, [sendCommandAsync, updateInstallationStatus, simulateInstallationProgress]);
 
-
   const connectWebSocket = useCallback(async () => {
     if (isConnectingRef.current) {
       console.log('Connection already in progress, skipping...');
@@ -750,7 +834,7 @@ const WebSocketProvider = ({ children }) => {
     }
 
     try {
-      const token = localStorage.getItem('token');
+      const token = getToken();
 
       if (!isValidToken(token)) {
         console.log('No valid token - preventing WebSocket connection');
@@ -804,6 +888,135 @@ const WebSocketProvider = ({ children }) => {
           const data = JSON.parse(event.data);
           console.log('PARSED WebSocket message:', data);
 
+          if (data.action === 'response') {
+            const command = data.command;
+            const result = data.result;
+            console.log(`Received response for command: ${command}`, result);
+
+            if (command === 'install_esxi') {
+              const success = result && (
+                (typeof result === 'string' && result.toLowerCase().includes('esxi installation done')) ||
+                (typeof result === 'object' && result.success === true)
+              );
+              
+              if (success) {
+                updateInstallationStatus(
+                  'esxi',
+                  INSTALLATION_STATUS.INSTALLED,
+                  100,
+                  'ESXi installed successfully!'
+                );
+              } else {
+                updateInstallationStatus(
+                  'esxi',
+                  INSTALLATION_STATUS.FAILED,
+                  0,
+                  'ESXi installation failed'
+                );
+              }
+            }
+
+            if (command === 'validate_esxi_connection_and_credentials') {
+              console.log('ESXi validation response:', result);
+            }
+
+            if (command === 'get_vm_details') {
+              console.log('VM details response:', result);
+            }
+
+            if (command === 'get_datastores' || command === 'create_datastore') {
+              console.log('Datastore response:', result);
+            }
+
+            const responseWithTimestamp = {
+              ...result,
+              timestamp: Date.now(),
+              rawResponse: data,
+              command: command
+            };
+
+            const responseKey = `${command}_${Date.now()}`;
+            
+            setCommandResponses(prev => ({
+              ...prev,
+              [responseKey]: responseWithTimestamp,
+              [command]: responseWithTimestamp
+            }));
+
+            const now = Date.now();
+            pendingRequests.current.forEach((request, requestId) => {
+              if (request.command === command) {
+                if (now - request.timestamp < 30000) {
+                  if (request.resolve) {
+                    request.resolve(responseWithTimestamp);
+                  }
+                  pendingRequests.current.delete(requestId);
+                }
+              }
+            });
+
+            listeners.current.forEach(listener => {
+              try {
+                listener({
+                  action: 'response',
+                  command: command,
+                  result: result,
+                  responseKey: responseKey,
+                  rawResponse: data
+                });
+              } catch (error) {
+                console.error('Error in WebSocket listener:', error);
+              }
+            });
+          }
+
+          if (data.type === 'COMMAND_RESPONSE') {
+            const command = data.command;
+            const result = data.data || data.result;
+            console.log(`Received COMMAND_RESPONSE for command: ${command}`, result);
+
+            const responseWithTimestamp = {
+              ...result,
+              timestamp: Date.now(),
+              rawResponse: data,
+              command: command
+            };
+
+            const responseKey = `${command}_${Date.now()}`;
+            
+            setCommandResponses(prev => ({
+              ...prev,
+              [responseKey]: responseWithTimestamp,
+              [command]: responseWithTimestamp
+            }));
+
+            const now = Date.now();
+            pendingRequests.current.forEach((request, requestId) => {
+              if (request.command === command) {
+                if (now - request.timestamp < 30000) {
+                  if (request.resolve) {
+                    request.resolve(responseWithTimestamp);
+                  }
+                  pendingRequests.current.delete(requestId);
+                }
+              }
+            });
+
+            listeners.current.forEach(listener => {
+              try {
+                listener({
+                  action: 'response',
+                  command: command,
+                  result: result,
+                  responseKey: responseKey,
+                  rawResponse: data
+                });
+              } catch (error) {
+                console.error('Error in WebSocket listener:', error);
+              }
+            });
+          }
+
           if (data.type === 'TOKEN_CONFIRMED') {
             console.log('WebSocket authentication confirmed');
             setIsConnected(true);
@@ -835,111 +1048,6 @@ const WebSocketProvider = ({ children }) => {
               );
             }
             return;
-          }
-
-          if (data.type === 'COMMAND_RESPONSE') {
-            const command = data.command;
-            console.log(`Received response for command: ${command}`, data.data);
-
-            if (command.includes('check_') && command.includes('_installed')) {
-              const serviceMatch = command.match(/check_(\w+)_role_installed/);
-              if (serviceMatch) {
-                const service = serviceMatch[1];
-                const isInstalled = data.data && (
-                  (typeof data.data === 'object' && data.data.installed === true) ||
-                  (typeof data.data === 'string' && data.data.toLowerCase().includes('true'))
-                );
-                
-                updateInstallationStatus(
-                  service,
-                  isInstalled ? INSTALLATION_STATUS.INSTALLED : INSTALLATION_STATUS.NOT_INSTALLED,
-                  isInstalled ? 100 : 0,
-                  isInstalled ? 'Installed' : 'Not installed'
-                );
-              }
-            }
-
-            if (command.includes('install_') && command.includes('_role')) {
-              const serviceMatch = command.match(/install_(\w+)_role/);
-              if (serviceMatch) {
-                const service = serviceMatch[1];
-                const success = data.data && (
-                  (typeof data.data === 'string' && data.data.toLowerCase().includes('installation done')) ||
-                  (typeof data.data === 'object' && data.data.success === true)
-                );
-                
-                if (success) {
-                  updateInstallationStatus(
-                    service,
-                    INSTALLATION_STATUS.INSTALLED,
-                    100,
-                    'Installation completed successfully!'
-                  );
-                }
-              }
-            }
-
-            if (command === 'install_esxi') {
-              const success = data.data && (
-                (typeof data.data === 'string' && data.data.toLowerCase().includes('installation done')) ||
-                (typeof data.data === 'object' && data.data.success === true)
-              );
-              
-              if (success) {
-                updateInstallationStatus(
-                  'esxi',
-                  INSTALLATION_STATUS.INSTALLED,
-                  100,
-                  'ESXi installed successfully!'
-                );
-              } else {
-                updateInstallationStatus(
-                  'esxi',
-                  INSTALLATION_STATUS.FAILED,
-                  0,
-                  'ESXi installation failed'
-                );
-              }
-            }
-
-            const responseWithTimestamp = {
-              ...data.data,
-              timestamp: Date.now(),
-              rawResponse: data
-            };
-
-            const responseKey = `${command}_${Date.now()}`;
-            
-            setCommandResponses(prev => ({
-              ...prev,
-              [responseKey]: responseWithTimestamp,
-              [command]: responseWithTimestamp
-            }));
-
-            const now = Date.now();
-            pendingRequests.current.forEach((request, requestId) => {
-              if (request.command === command) {
-                if (now - request.timestamp < 30000) {
-                  if (request.resolve) {
-                    request.resolve(responseWithTimestamp);
-                  }
-                  pendingRequests.current.delete(requestId);
-                }
-              }
-            });
-
-            listeners.current.forEach(listener => {
-              try {
-                listener({
-                  action: 'response',
-                  command: command,
-                  result: data.data,
-                  responseKey: responseKey
-                });
-              } catch (error) {
-                console.error('Error in WebSocket listener:', error);
-              }
-            });
           }
 
           if (data.type === 'ERROR') {
@@ -1007,8 +1115,7 @@ const WebSocketProvider = ({ children }) => {
         scheduleReconnect();
       }
     }
-  }, [isValidToken, reconnectAttempts, scheduleReconnect, shouldAutoConnect, flushMessageQueue, updateInstallationStatus]);
-
+  }, [isValidToken, reconnectAttempts, scheduleReconnect, shouldAutoConnect, flushMessageQueue, updateInstallationStatus, getToken]);
 
   const startConnection = useCallback(() => {
     console.log('Manual WebSocket connection started');
@@ -1052,7 +1159,7 @@ const WebSocketProvider = ({ children }) => {
     const matchingResponses = commandResponsesArray
       .filter(([key, value]) => 
         key.startsWith(`${commandOrId}_`) || 
-        (value.rawResponse && value.rawResponse.command === commandOrId)
+        (value.command === commandOrId)
       )
       .sort((a, b) => b[1].timestamp - a[1].timestamp); 
     
@@ -1060,7 +1167,7 @@ const WebSocketProvider = ({ children }) => {
   }, [commandResponses]);
 
   const refreshAgentStatus = useCallback(async () => {
-    const token = localStorage.getItem('token');
+    const token = getToken();
     if (!token) {
       setAgentStatus('error');
       return;
@@ -1076,7 +1183,7 @@ const WebSocketProvider = ({ children }) => {
     }
 
     return status;
-  }, [checkAgentStatus, isConnected, connectWebSocket]);
+  }, [checkAgentStatus, isConnected, connectWebSocket, getToken]);
 
   const addListener = useCallback((listener) => {
     listeners.current.add(listener);
@@ -1109,7 +1216,7 @@ const WebSocketProvider = ({ children }) => {
   }, [commandResponses]);
 
   const testWebSocketConnection = useCallback(() => {
-    const token = localStorage.getItem('token');
+    const token = getToken();
     if (!token) {
       console.log('No token found for testing');
       return null;
@@ -1124,8 +1231,7 @@ const WebSocketProvider = ({ children }) => {
     testWs.onerror = (error) => console.log('TEST: WebSocket error:', error);
 
     return testWs;
-  }, []);
-
+  }, [getToken]);
 
   useEffect(() => {
     const cleanupInterval = setInterval(() => {
@@ -1168,7 +1274,7 @@ const WebSocketProvider = ({ children }) => {
   }, []);
 
   useEffect(() => {
-    const token = localStorage.getItem('token');
+    const token = getToken();
 
     if (shouldAutoConnect && isValidToken(token)) {
       console.log('Initializing WebSocket connection...');
@@ -1193,8 +1299,7 @@ const WebSocketProvider = ({ children }) => {
       });
       pendingRequests.current.clear();
     };
-  }, [connectWebSocket, isValidToken, shouldAutoConnect]);
-
+  }, [connectWebSocket, isValidToken, shouldAutoConnect, getToken]);
 
   const value = {
     sendCommand, 
@@ -1222,16 +1327,14 @@ const WebSocketProvider = ({ children }) => {
     checkServiceInstalled,
     startServiceInstallation,
     updateInstallationStatus,
-    
     saveEsxiCredentials,
     getSavedEsxiConnections,
     getEsxiConnectionWithCredentials,
+    getEsxiHostById,
     updateEsxiConnectionStatus,
     deleteEsxiConnection,
     markEsxiAsInstalled,
     installEsxiWithSavedCredentials,
-    
-    // Add the new function to the context value
     getEsxiVmDetails
   };
 

@@ -15,7 +15,7 @@ const Sidebar = ({ onItemClick }) => {
     { id: 'resource-monitor', label: 'Resource Monitor', path: '/resource-monitor' },
     { id: 'ESXi', label: 'ESXi', path: '/esxi' },
     { id: 'networking', label: 'Networking', path: '/networking' },
-    { id: 'device-auto-config', label: 'Device Auto Config', path: '/device-auto-config' },
+    { id: 'machine-management', label: 'Machine Management', path: '/machine-management' },
     { id: 'active-directory', label: 'Active Directory', path: '/active-directory' },
     { id: 'routing', label: 'Routing', path: '/routing' }
   ];

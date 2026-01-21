@@ -47,6 +47,12 @@ export default function SignupPage() {
             alert(res.data.message || "Account created successfully!");
             navigate("/");
         } catch (err) {
+
+            if (err.response.status = 400){
+            setError("User already Exists");
+            setLoading(false);
+            return;
+        }
             console.error("Signup error:", err);
             
             if (err.response) {

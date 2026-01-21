@@ -16,7 +16,7 @@ router.post("/signup", async (req, res) => {
     try {
         const [existing] = await db.query("SELECT * FROM users WHERE username = ?", [username]);
         if (existing.length > 0) {
-            return res.status(400).json({ error: "User already exists" });
+            return res.status(400).json({ message: "User already exists" });
         }
         const hashed = await bcrypt.hash(password, 10);
         await db.query("INSERT INTO users (username, password) VALUES (?, ?)", [username, hashed]);

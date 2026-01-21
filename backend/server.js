@@ -3,20 +3,23 @@ import cors from "cors";
 import WebSocket from "ws";
 import dotenv from "dotenv";
 import path from "path";
-import { fileURLToPath } from "url"
+import { fileURLToPath } from "url";
+import jwt from "jsonwebtoken";
 
-const _filename = fileURLToPath(import.meta.url);
-const _dirname = path.dirname(_filename);
-const socket_port = process.env.socket_port || 8081;
-const my_ip = process.env.my_ip || 'localhost';
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
-dotenv.config({ path: path.join(_dirname, ".env") });
+dotenv.config({ path: path.join(__dirname, ".env") });
 
 console.log("Server starting...");
-console.log("Environment variables loaded from:", path.join(_dirname, ".env"));
+console.log("Environment variables loaded from:", path.join(__dirname, ".env"));
 
 const app = express();
-const server_port = 5000;
+const server_port = process.env.SERVER_PORT || 5000;
+const socket_port = process.env.SOCKET_PORT || 8081;
+const my_ip = process.env.MY_IP || 'localhost';
+const JWT_SECRET = process.env.JWT_SECRET || "secretkey123";
+
 app.use(cors());
 app.use(express.json());
 
@@ -53,8 +56,29 @@ try {
     console.error("Error importing esxiRoutes:", error);
     console.error("Error stack:", error.stack);
     esxiRoutes = express.Router();
-    esxiRoutes.post("/save-esxi", (req, res) => {
-        res.status(500).json({ error: "ESXi module failed to load" });
+    esxiRoutes.post("/save-esxi-host", (req, res) => {
+        res.status(500).json({ 
+            success: false,
+            error: "ESXi module failed to load: " + error.message 
+        });
+    });
+    esxiRoutes.get("/get-esxi-connections", (req, res) => {
+        res.status(500).json({ 
+            success: false,
+            error: "ESXi module failed to load: " + error.message 
+        });
+    });
+    esxiRoutes.get("/get-esxi-host/:id", (req, res) => {
+        res.status(500).json({ 
+            success: false,
+            error: "ESXi module failed to load: " + error.message 
+        });
+    });
+    esxiRoutes.get("/get-esxi-host-with-password/:id", (req, res) => {
+        res.status(500).json({ 
+            success: false,
+            error: "ESXi module failed to load: " + error.message 
+        });
     });
 }
 
@@ -69,28 +93,119 @@ try {
     console.error("Error stack:", error.stack);
     db = {
         query: async () => {
-            console.warn(" Using mock database - db import failed");
+            console.warn("Using mock database - db import failed");
+            return [[]];
+        },
+        execute: async () => {
+            console.warn("Using mock execute - db import failed");
             return [[]];
         }
     };
 }
 
 app.use("/api", authRoutes);
-app.use("/api", esxiRoutes);
+app.use("/api/esxi", esxiRoutes); 
 
 const persistentConnections = new Map();
+
+const isValidIP = (ip) => {
+    const ipPattern = /^(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/;
+    return ipPattern.test(ip);
+};
+
+app.post("/api/validate-esxi-connection", async (req, res) => {
+    try {
+        const { esxi_info } = req.body;
+        
+        if (!esxi_info || !esxi_info.ip) {
+            return res.status(400).json({ 
+                success: false,
+                valid: false, 
+                message: "ESXi information with IP is required" 
+            });
+        }
+        
+        if (!isValidIP(esxi_info.ip)) {
+            return res.status(400).json({
+                success: false,
+                valid: false,
+                message: 'Invalid IP address format. IP should be in format like 192.168.1.100',
+                esxi_info: {
+                    ...esxi_info,
+                    password: '***', 
+                    validated_at: new Date().toISOString().replace('T', ' ').split('.')[0]
+                }
+            });
+        }
+        
+        console.log(`Validating ESXi connection to ${esxi_info.ip}...`);
+        
+        try {
+            const connectionTest = true; 
+            
+            if (connectionTest) {
+                return res.json({
+                    success: true,
+                    valid: true,
+                    message: 'ESXi connection and credentials are valid (simulated)',
+                    esxi_info: {
+                        ...esxi_info,
+                        password: '***', 
+                        validated_at: new Date().toISOString().replace('T', ' ').split('.')[0],
+                        password_received: !!esxi_info.password
+                    }
+                });
+            } else {
+                return res.json({
+                    success: false,
+                    valid: false,
+                    message: 'Failed to connect to ESXi host. Check IP and credentials.',
+                    esxi_info: {
+                        ...esxi_info,
+                        password: '***', 
+                        validated_at: new Date().toISOString().replace('T', ' ').split('.')[0]
+                    }
+                });
+            }
+        } catch (error) {
+            console.error("ESXi connection test error:", error);
+            return res.status(500).json({
+                success: false,
+                valid: false,
+                message: `Connection test error: ${error.message}`,
+                esxi_info: {
+                    ...esxi_info,
+                    password: '***', 
+                    validated_at: new Date().toISOString().replace('T', ' ').split('.')[0]
+                }
+            });
+        }
+        
+    } catch (error) {
+        console.error("Error validating ESXi connection:", error);
+        return res.status(500).json({ 
+            success: false,
+            valid: false, 
+            message: "Internal server error",
+            error: error.message 
+        });
+    }
+});
 
 app.post("/api/send-command", async (req, res) => {
     try {
         const { username, command, payload } = req.body;
 
         if (!username || !command) {
-            return res.status(400).json({ error: "Username and command are required" });
+            return res.status(400).json({ 
+                success: false,
+                error: "Username and command are required" 
+            });
         }
 
         console.log(`Forwarding command to WebSocket server: ${command} for user: ${username}`);
 
-        const response = await fetch('http://my_ip:socket_port/api/send-command', {
+        const response = await fetch(`http://${my_ip}:${socket_port}/api/send-command`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -112,6 +227,7 @@ app.post("/api/send-command", async (req, res) => {
     } catch (error) {
         console.error("Error forwarding command:", error);
         res.status(500).json({
+            success: false,
             error: "Internal server error",
             details: error.message
         });
@@ -122,7 +238,10 @@ app.get("/check-agent-status", async (req, res) => {
     const token = req.query.token;
 
     if (!token) {
-        return res.json({ status: "error", message: "Token missing" });
+        return res.json({ 
+            status: "error", 
+            message: "Token missing" 
+        });
     }
 
     let responded = false;
@@ -149,13 +268,19 @@ app.get("/check-agent-status", async (req, res) => {
 
         connectionTimeout = setTimeout(() => {
             if (!responded) {
-                safeRespond({ status: "timeout", message: "Connection timeout" });
+                safeRespond({ 
+                    status: "timeout", 
+                    message: "Connection timeout" 
+                });
             }
         }, 5000);
 
         responseTimeout = setTimeout(() => {
             if (!responded) {
-                safeRespond({ status: "timeout", message: "Response timeout" });
+                safeRespond({ 
+                    status: "timeout", 
+                    message: "Response timeout" 
+                });
             }
         }, 8000);
 
@@ -169,9 +294,16 @@ app.get("/check-agent-status", async (req, res) => {
                 console.log("Received message in check-agent-status:", data);
 
                 if (data.type === "TOKEN_CONFIRMED") {
-                    safeRespond({ status: "connected", username: data.username });
+                    safeRespond({ 
+                        status: "connected", 
+                        username: data.username,
+                        userId: data.userId 
+                    });
                 } else if (data.status === "error") {
-                    safeRespond({ status: "invalid", message: data.message });
+                    safeRespond({ 
+                        status: "invalid", 
+                        message: data.message 
+                    });
                 }
 
             } catch (err) {
@@ -183,7 +315,10 @@ app.get("/check-agent-status", async (req, res) => {
             console.log(`WS closed: ${code} - ${reason}`);
             if (!responded) {
                 if (code !== 1000) {
-                    safeRespond({ status: "disconnected", message: "WebSocket connection closed" });
+                    safeRespond({ 
+                        status: "disconnected", 
+                        message: "WebSocket connection closed" 
+                    });
                 }
             }
         });
@@ -191,13 +326,19 @@ app.get("/check-agent-status", async (req, res) => {
         ws.on("error", (err) => {
             console.error("WS error in check-agent-status:", err.message);
             if (!responded) {
-                safeRespond({ status: "invalid", message: "Connection failed" });
+                safeRespond({ 
+                    status: "invalid", 
+                    message: "Connection failed" 
+                });
             }
         });
 
     } catch (err) {
         console.error("Error creating WebSocket:", err);
-        safeRespond({ status: "error", message: "Internal server error" });
+        safeRespond({ 
+            status: "error", 
+            message: "Internal server error" 
+        });
     }
 });
 
@@ -205,70 +346,80 @@ app.get("/api/agent-status", async (req, res) => {
     const token = req.query.token;
 
     if (!token) {
-        return res.json({ status: "error", message: "Token missing" });
+        return res.json({ 
+            status: "error", 
+            message: "Token missing" 
+        });
     }
 
     try {
-        const response = await fetch('http://my_ip:socket_port/api/agent-status', {
-            method: 'POST',
+        const response = await fetch(`http://${my_ip}:${socket_port}/api/agent-status?token=${encodeURIComponent(token)}`, {
+            method: 'GET',
             headers: {
                 'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ token })
+            }
         });
 
         if (response.ok) {
             const result = await response.json();
             res.json(result);
-
         } else {
-            res.json({ status: "disconnected", message: "Agent not connected" });
+            res.json({ 
+                status: "disconnected", 
+                message: "Agent not connected" 
+            });
         }
 
     } catch (error) {
         console.error("Error checking agent status:", error);
-        res.json({ status: "error", message: "Failed to check agent status" });
+        res.json({ 
+            status: "error", 
+            message: "Failed to check agent status" 
+        });
     }
 });
 
-
-import jwt from "jsonwebtoken";
-
-const JWT_SECRET = process.env.JWT_SECRET || "secretkey123";
-
-app.get("/validate-token", async (req, res) => {
+app.get("/api/validate-token", async (req, res) => {
     const token = req.query.token;
 
     if (!token) {
-        return res.json({ valid: false, message: "Token missing" });
+        return res.json({ 
+            valid: false, 
+            message: "Token missing" 
+        });
     }
 
     try {
         const decoded = jwt.verify(token, JWT_SECRET);
-
+        
         const [rows] = await db.query(
-            "SELECT username, status FROM agents WHERE username = ? AND status = 'connected'",
+            "SELECT username, status FROM agents WHERE username = ?",
             [decoded.username]
         );
 
         if (rows.length > 0) {
             return res.json({
+                success: true,
                 valid: true,
-                status: "connected",
-                username: decoded.username
+                status: rows[0].status,
+                username: decoded.username,
+                userId: decoded.id
             });
         } else {
             return res.json({
+                success: true,
                 valid: true,
                 status: "disconnected",
                 username: decoded.username,
-                message: "Token valid but agent not connected"
+                userId: decoded.id,
+                message: "Token valid but agent not registered"
             });
         }
 
     } catch (err) {
         console.error("Token validation error:", err.message);
         return res.json({
+            success: false,
             valid: false,
             status: "invalid",
             message: "Invalid token"
@@ -278,16 +429,67 @@ app.get("/validate-token", async (req, res) => {
 
 app.get("/health", (req, res) => {
     res.json({
+        success: true,
         status: "ok",
         message: "Backend server is running",
         timestamp: new Date().toISOString(),
-        environment: process.env.NODE_ENV || "development"
+        environment: process.env.NODE_ENV || "development",
+        server_port: server_port,
+        socket_port: socket_port
     });
+});
+
+app.get("/api/test-esxi-routes", async (req, res) => {
+    try {
+        const token = req.query.token;
+        
+        if (!token) {
+            return res.json({
+                success: false,
+                message: "Token required for testing"
+            });
+        }
+        
+        const decoded = jwt.verify(token, JWT_SECRET);
+        
+        const [users] = await db.query("SELECT COUNT(*) as count FROM users WHERE id = ?", [decoded.id]);
+        const [esxiHosts] = await db.query("SELECT COUNT(*) as count FROM esxi_hosts WHERE user_id = ?", [decoded.id]);
+        const [agents] = await db.query("SELECT COUNT(*) as count FROM agents WHERE username = ?", [decoded.username]);
+        
+        res.json({
+            success: true,
+            message: "ESXi routes test successful",
+            user: {
+                id: decoded.id,
+                username: decoded.username
+            },
+            database: {
+                users: users[0].count,
+                esxi_hosts: esxiHosts[0].count,
+                agents: agents[0].count
+            },
+            endpoints: {
+                save_esxi_host: "POST /api/esxi/save-esxi-host",
+                get_esxi_hosts: "GET /api/esxi/get-esxi-hosts",
+                get_esxi_connections: "GET /api/esxi/get-esxi-connections",
+                validate_esxi_connection: "POST /api/validate-esxi-connection"
+            }
+        });
+        
+    } catch (error) {
+        console.error("Error testing ESXi routes:", error);
+        res.status(500).json({
+            success: false,
+            message: "Test failed",
+            error: error.message
+        });
+    }
 });
 
 app.use((err, req, res, next) => {
     console.error('Server Error:', err.stack);
     res.status(500).json({
+        success: false,
         error: 'Internal Server Error',
         message: err.message
     });
@@ -295,11 +497,21 @@ app.use((err, req, res, next) => {
 
 app.use((req, res) => {
     res.status(404).json({
+        success: false,
         error: 'Not Found',
         message: `Route ${req.method} ${req.url} not found`
     });
 });
 
 app.listen(server_port, '0.0.0.0', () => {
-    console.log("Backend running on http://my_ip:server_port");
+    console.log(`Backend server running on http://${my_ip}:${server_port}`);
+    console.log(`WebSocket server expected at: ws://${my_ip}:${socket_port}/socket`);
+    console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+    console.log(`Available endpoints:`);
+    console.log(`  POST   /api/esxi/save-esxi-host`);
+    console.log(`  GET    /api/esxi/get-esxi-hosts`);
+    console.log(`  GET    /api/esxi/get-esxi-connections`);
+    console.log(`  POST   /api/validate-esxi-connection`);
+    console.log(`  GET    /check-agent-status`);
+    console.log(`  GET    /health`);
 });

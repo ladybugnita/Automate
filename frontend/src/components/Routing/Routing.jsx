@@ -8,7 +8,7 @@ const Routing = () => {
   
   const navButtons = [
     'Dashboard', 'DNS Configuration', 'Event Viewer', 'DHCP', 'Users',
-    'Resource Monitor', 'WDS', 'Networking', 'Device Auto Config',
+    'Resource Monitor', 'WDS', 'Networking', 'Machine Management',
     'Active Directory', 'Routing'
   ];
   

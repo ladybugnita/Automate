@@ -1,61 +1,103 @@
 import db from "../config/db.js";
 
-// Save or update ESXi connection with user_id
-export const saveEsxiConnection = async (connectionData) => {
+export const checkDuplicateHostIp = async (user_id, host_ip) => {
     try {
-        const { 
-            user_id, // Added
-            connection_name, 
-            ip_address, 
-            username = 'root', 
-            password, 
-            installation_type = 'existing',
-            status = 'pending'
-        } = connectionData;
-
-        // If user_id is provided, use it; otherwise use a default (for backward compatibility)
-        const userId = user_id || 1; // Default to user ID 1 if not provided
-        
-        const [result] = await db.query(
-            `INSERT INTO esxi_connections 
-             (user_id, connection_name, ip_address, username, password, installation_type, status) 
-             VALUES (?, ?, ?, ?, ?, ?, ?)
-             ON DUPLICATE KEY UPDATE
-             connection_name = VALUES(connection_name),
-             username = VALUES(username),
-             password = VALUES(password),
-             installation_type = VALUES(installation_type),
-             status = VALUES(status),
-             updated_at = NOW()`,
-            [userId, connection_name, ip_address, username, password, installation_type, status]
+        const [rows] = await db.query(
+            'SELECT id FROM esxi_hosts WHERE user_id = ? AND host_ip = ?',
+            [user_id, host_ip]
         );
-        
-        return { 
-            success: true, 
-            id: result.insertId || result.affectedRows,
-            message: 'ESXi connection saved successfully' 
-        };
+        return rows.length > 0;
     } catch (error) {
-        console.error('Error saving ESXi connection:', error);
+        console.error('Error checking duplicate host IP:', error);
         throw error;
     }
 };
 
-// Get ESXi connections for a specific user
-export const getEsxiConnections = async (filters = {}) => {
+export const saveEsxiHost = async (hostData) => {
     try {
-        const { user_id, status, installation_type } = filters;
+        const { 
+            user_id, 
+            connection_name, 
+            host_ip, 
+            username = 'root', 
+            password, 
+            installation_type = 'existing',
+            status = 'pending',
+            connectionName  
+        } = hostData;
+
+        console.log('Saving ESXi host with data:', {
+            user_id,
+            connection_name: connection_name || connectionName,
+            host_ip,
+            username,
+            password_length: password ? password.length : 0,
+            installation_type,
+            status
+        });
+
+        if (!user_id) {
+            throw new Error('user_id is required');
+        }
+
+        if (!host_ip || !password) {
+            throw new Error('host_ip and password are required');
+        }
+
+        const isDuplicate = await checkDuplicateHostIp(user_id, host_ip);
+        if (isDuplicate) {
+            throw new Error(`Host IP ${host_ip} is already added for your account. Please use a different IP or manage the existing connection.`);
+        }
+
+        const finalConnectionName = connection_name || connectionName || `ESXi-${host_ip}`;
         
-        let query = 'SELECT * FROM esxi_connections WHERE 1=1';
-        const params = [];
+        const [result] = await db.query(
+            `INSERT INTO esxi_hosts 
+             (user_id, connection_name, host_ip, username, password, installation_type, status, created_at, updated_at) 
+             VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
+            [user_id, finalConnectionName, host_ip, username, password, installation_type, status]
+        );
         
-        // Filter by user_id if provided
-        if (user_id) {
-            query += ' AND user_id = ?';
-            params.push(user_id);
+        console.log(`ESXi host saved with ID: ${result.insertId}`);
+        
+        const savedHost = await getEsxiHostById(result.insertId, user_id, true);
+        
+        return { 
+            success: true, 
+            id: result.insertId,
+            host_id: result.insertId,
+            data: savedHost,
+            message: 'ESXi host saved successfully' 
+        };
+    } catch (error) {
+        console.error('Error saving ESXi host:', error);
+        
+        if (error.code === 'ER_DUP_ENTRY') {
+            throw new Error('You already have an ESXi host with this IP address');
         }
         
-        // Add optional filters
+        throw error;
+    }
+};
+
+export const getEsxiHosts = async (filters = {}) => {
+    try {
+        const { user_id, status, installation_type, include_password = false } = filters;
+        
+        console.log('Fetching ESXi hosts with filters:', {
+            user_id,
+            status,
+            installation_type,
+            include_password
+        });
+        
+        if (!user_id) {
+            throw new Error('user_id is required to fetch ESXi hosts');
+        }
+        
+        let query = 'SELECT * FROM esxi_hosts WHERE user_id = ?';
+        const params = [user_id];
+        
         if (status) {
             query += ' AND status = ?';
             params.push(status);
@@ -69,20 +111,34 @@ export const getEsxiConnections = async (filters = {}) => {
         query += ' ORDER BY created_at DESC';
         
         const [rows] = await db.query(query, params);
-        return rows;
+        
+        console.log(`Found ${rows.length} ESXi hosts for user ${user_id}`);
+        
+        if (include_password) {
+            return rows;
+        }
+        
+        return rows.map(row => {
+            const { password, ...safeData } = row;
+            return safeData;
+        });
     } catch (error) {
-        console.error('Error fetching ESXi connections:', error);
+        console.error('Error fetching ESXi hosts:', error);
         throw error;
     }
 };
 
-// Get single ESXi connection by IP
-export const getEsxiConnectionByIP = async (ip_address, user_id = null) => {
+export const getEsxiHostById = async (host_id, user_id = null, include_password = false) => {
     try {
-        let query = 'SELECT * FROM esxi_connections WHERE ip_address = ?';
-        const params = [ip_address];
+        console.log('Getting ESXi host by ID:', {
+            host_id,
+            user_id,
+            include_password
+        });
         
-        // Add user filter if provided
+        let query = 'SELECT * FROM esxi_hosts WHERE id = ?';
+        const params = [host_id];
+        
         if (user_id) {
             query += ' AND user_id = ?';
             params.push(user_id);
@@ -90,22 +146,99 @@ export const getEsxiConnectionByIP = async (ip_address, user_id = null) => {
         
         const [rows] = await db.query(query, params);
         
-        return rows.length > 0 ? rows[0] : null;
+        if (rows.length === 0) {
+            console.log(`ESXi host ${host_id} not found for user ${user_id}`);
+            return null;
+        }
+        
+        console.log(`Found ESXi host ${host_id}`);
+        
+        if (include_password) {
+            return rows[0];
+        }
+        
+        const { password, ...safeData } = rows[0];
+        return safeData;
     } catch (error) {
-        console.error('Error fetching ESXi connection by IP:', error);
+        console.error('Error fetching ESXi host by ID:', error);
         throw error;
     }
 };
 
-// Update connection status
-export const updateConnectionStatus = async (ip_address, status, user_id = null) => {
+export const getEsxiHostByIP = async (host_ip, user_id = null, include_password = false) => {
     try {
-        let query = `UPDATE esxi_connections 
+        console.log('Getting ESXi host by IP:', {
+            host_ip,
+            user_id,
+            include_password
+        });
+        
+        let query = 'SELECT * FROM esxi_hosts WHERE host_ip = ?';
+        const params = [host_ip];
+        
+        if (user_id) {
+            query += ' AND user_id = ?';
+            params.push(user_id);
+        }
+        
+        const [rows] = await db.query(query, params);
+        
+        if (rows.length === 0) {
+            console.log(`ESXi host with IP ${host_ip} not found for user ${user_id}`);
+            return null;
+        }
+        
+        if (include_password) {
+            return rows[0];
+        }
+        
+        const { password, ...safeData } = rows[0];
+        return safeData;
+    } catch (error) {
+        console.error('Error fetching ESXi host by IP:', error);
+        throw error;
+    }
+};
+
+export const getEsxiHostWithPassword = async (host_id, user_id) => {
+    try {
+        console.log('Getting ESXi host with password:', {
+            host_id,
+            user_id
+        });
+        
+        const query = 'SELECT * FROM esxi_hosts WHERE id = ? AND user_id = ?';
+        const params = [host_id, user_id];
+        
+        const [rows] = await db.query(query, params);
+        
+        if (rows.length === 0) {
+            console.log(`ESXi host ${host_id} with password not found for user ${user_id}`);
+            return null;
+        }
+        
+        console.log(`Found ESXi host ${host_id} with password`);
+        
+        return rows[0];
+    } catch (error) {
+        console.error('Error fetching ESXi host with password:', error);
+        throw error;
+    }
+};
+
+export const updateHostStatus = async (host_id, status, user_id = null) => {
+    try {
+        console.log('Updating host status:', {
+            host_id,
+            status,
+            user_id
+        });
+        
+        let query = `UPDATE esxi_hosts 
                      SET status = ?, updated_at = NOW(), last_seen = NOW()
-                     WHERE ip_address = ?`;
-        const params = [status, ip_address];
+                     WHERE id = ?`;
+        const params = [status, host_id];
         
-        // Add user filter if provided
         if (user_id) {
             query += ' AND user_id = ?';
             params.push(user_id);
@@ -113,23 +246,30 @@ export const updateConnectionStatus = async (ip_address, status, user_id = null)
         
         const [result] = await db.query(query, params);
         
+        const success = result.affectedRows > 0;
+        console.log(`Host status update ${success ? 'successful' : 'failed'}, affected rows: ${result.affectedRows}`);
+        
         return { 
-            success: result.affectedRows > 0,
-            message: result.affectedRows > 0 ? 'Status updated' : 'No connection found'
+            success: success,
+            affectedRows: result.affectedRows,
+            message: success ? 'Status updated' : 'No host found'
         };
     } catch (error) {
-        console.error('Error updating connection status:', error);
+        console.error('Error updating host status:', error);
         throw error;
     }
 };
 
-// Delete ESXi connection
-export const deleteEsxiConnection = async (ip_address, user_id = null) => {
+export const deleteEsxiHost = async (host_id, user_id = null) => {
     try {
-        let query = 'DELETE FROM esxi_connections WHERE ip_address = ?';
-        const params = [ip_address];
+        console.log('Deleting ESXi host:', {
+            host_id,
+            user_id
+        });
         
-        // Add user filter if provided
+        let query = 'DELETE FROM esxi_hosts WHERE id = ?';
+        const params = [host_id];
+        
         if (user_id) {
             query += ' AND user_id = ?';
             params.push(user_id);
@@ -137,25 +277,32 @@ export const deleteEsxiConnection = async (ip_address, user_id = null) => {
         
         const [result] = await db.query(query, params);
         
+        const success = result.affectedRows > 0;
+        console.log(`Host deletion ${success ? 'successful' : 'failed'}, affected rows: ${result.affectedRows}`);
+        
         return { 
-            success: result.affectedRows > 0,
-            message: result.affectedRows > 0 ? 'Connection deleted' : 'No connection found'
+            success: success,
+            affectedRows: result.affectedRows,
+            message: success ? 'Host deleted' : 'No host found'
         };
     } catch (error) {
-        console.error('Error deleting ESXi connection:', error);
+        console.error('Error deleting ESXi host:', error);
         throw error;
     }
 };
 
-// Mark connection as installed
-export const markAsInstalled = async (ip_address, user_id = null) => {
+export const markHostAsInstalled = async (host_id, user_id = null) => {
     try {
-        let query = `UPDATE esxi_connections 
+        console.log('Marking host as installed:', {
+            host_id,
+            user_id
+        });
+        
+        let query = `UPDATE esxi_hosts 
                      SET status = 'installed', updated_at = NOW()
-                     WHERE ip_address = ?`;
-        const params = [ip_address];
+                     WHERE id = ?`;
+        const params = [host_id];
         
-        // Add user filter if provided
         if (user_id) {
             query += ' AND user_id = ?';
             params.push(user_id);
@@ -163,12 +310,303 @@ export const markAsInstalled = async (ip_address, user_id = null) => {
         
         const [result] = await db.query(query, params);
         
+        const success = result.affectedRows > 0;
+        console.log(`Mark as installed ${success ? 'successful' : 'failed'}, affected rows: ${result.affectedRows}`);
+        
         return { 
-            success: result.affectedRows > 0,
+            success: success,
+            affectedRows: result.affectedRows,
             message: 'Marked as installed'
         };
     } catch (error) {
         console.error('Error marking as installed:', error);
+        throw error;
+    }
+};
+
+export const createVirtualMachine = async (vmData) => {
+    try {
+        console.log('Creating virtual machine:', {
+            user_id: vmData.user_id,
+            esxi_host_id: vmData.esxi_host_id,
+            vm_name: vmData.vm_name
+        });
+
+        const { 
+            user_id,
+            esxi_host_id,
+            vm_name,
+            vm_size = 'small',
+            vm_ip = null,
+            vm_username = 'root',
+            vm_password = null,
+            status = 'creating'
+        } = vmData;
+
+        if (!user_id || !esxi_host_id || !vm_name) {
+            throw new Error('user_id, esxi_host_id, and vm_name are required');
+        }
+
+        const [hostCheck] = await db.query(
+            'SELECT id FROM esxi_hosts WHERE id = ? AND user_id = ?',
+            [esxi_host_id, user_id]
+        );
+        
+        if (hostCheck.length === 0) {
+            throw new Error('ESXi host not found or access denied');
+        }
+        
+        const [result] = await db.query(
+            `INSERT INTO virtual_machines 
+             (user_id, esxi_host_id, vm_name, vm_size, vm_ip, vm_username, vm_password, status, created_at, updated_at) 
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
+            [user_id, esxi_host_id, vm_name, vm_size, vm_ip, vm_username, vm_password, status]
+        );
+        
+        console.log(`Virtual machine created with ID: ${result.insertId}`);
+        
+        return { 
+            success: true, 
+            id: result.insertId,
+            vm_id: result.insertId,
+            data: {
+                id: result.insertId,
+                vm_name,
+                esxi_host_id
+            },
+            message: 'Virtual machine created successfully' 
+        };
+    } catch (error) {
+        console.error('Error creating virtual machine:', error);
+        
+        if (error.code === 'ER_DUP_ENTRY') {
+            throw new Error('A VM with this name already exists on this ESXi host');
+        }
+        
+        throw error;
+    }
+};
+
+export const getVirtualMachines = async (filters = {}) => {
+    try {
+        const { user_id, esxi_host_id, status } = filters;
+        
+        console.log('Fetching virtual machines with filters:', {
+            user_id,
+            esxi_host_id,
+            status
+        });
+        
+        if (!user_id) {
+            throw new Error('user_id is required to fetch virtual machines');
+        }
+        
+        let query = `
+            SELECT vm.*, eh.connection_name, eh.host_ip 
+            FROM virtual_machines vm
+            JOIN esxi_hosts eh ON vm.esxi_host_id = eh.id
+            WHERE vm.user_id = ?
+        `;
+        const params = [user_id];
+        
+        if (esxi_host_id) {
+            query += ' AND vm.esxi_host_id = ?';
+            params.push(esxi_host_id);
+        }
+        
+        if (status) {
+            query += ' AND vm.status = ?';
+            params.push(status);
+        }
+        
+        query += ' ORDER BY vm.created_at DESC';
+        
+        const [rows] = await db.query(query, params);
+        
+        console.log(`Found ${rows.length} virtual machines for user ${user_id}`);
+        
+        return rows.map(row => {
+            const { vm_password, ...safeData } = row;
+            return safeData;
+        });
+    } catch (error) {
+        console.error('Error fetching virtual machines:', error);
+        throw error;
+    }
+};
+
+export const updateVmStatus = async (vm_id, status, user_id = null) => {
+    try {
+        console.log('Updating VM status:', {
+            vm_id,
+            status,
+            user_id
+        });
+        
+        let query = `UPDATE virtual_machines 
+                     SET status = ?, updated_at = NOW()
+                     WHERE id = ?`;
+        const params = [status, vm_id];
+        
+        if (user_id) {
+            query += ' AND user_id = ?';
+            params.push(user_id);
+        }
+        
+        const [result] = await db.query(query, params);
+        
+        const success = result.affectedRows > 0;
+        console.log(`VM status update ${success ? 'successful' : 'failed'}, affected rows: ${result.affectedRows}`);
+        
+        return { 
+            success: success,
+            affectedRows: result.affectedRows,
+            message: success ? 'VM status updated' : 'No VM found'
+        };
+    } catch (error) {
+        console.error('Error updating VM status:', error);
+        throw error;
+    }
+};
+
+export const deleteVirtualMachine = async (vm_id, user_id = null) => {
+    try {
+        console.log('Deleting virtual machine:', {
+            vm_id,
+            user_id
+        });
+        
+        let query = 'DELETE FROM virtual_machines WHERE id = ?';
+        const params = [vm_id];
+        
+        if (user_id) {
+            query += ' AND user_id = ?';
+            params.push(user_id);
+        }
+        
+        const [result] = await db.query(query, params);
+        
+        const success = result.affectedRows > 0;
+        console.log(`VM deletion ${success ? 'successful' : 'failed'}, affected rows: ${result.affectedRows}`);
+        
+        return { 
+            success: success,
+            affectedRows: result.affectedRows,
+            message: success ? 'VM deleted' : 'No VM found'
+        };
+    } catch (error) {
+        console.error('Error deleting virtual machine:', error);
+        throw error;
+    }
+};
+
+export const getEsxiCredentials = async (host_id, user_id) => {
+    try {
+        console.log('Getting ESXi credentials for connection:', {
+            host_id,
+            user_id
+        });
+        
+        const query = `
+            SELECT 
+                id,
+                connection_name,
+                host_ip as ip,
+                username,
+                password,
+                status
+            FROM esxi_hosts 
+            WHERE id = ? AND user_id = ?`;
+        
+        const [rows] = await db.query(query, [host_id, user_id]);
+        
+        if (rows.length === 0) {
+            console.log(`No credentials found for host ${host_id} and user ${user_id}`);
+            return null;
+        }
+        
+        const host = rows[0];
+        
+        return {
+            id: host.id,
+            connection_id: host.id,
+            connection_name: host.connection_name,
+            name: host.connection_name,
+            ip: host.ip,
+            host_ip: host.ip,
+            username: host.username || 'root',
+            password: host.password, 
+            status: host.status
+        };
+    } catch (error) {
+        console.error('Error getting ESXi credentials:', error);
+        throw error;
+    }
+};
+
+export const updateEsxiHost = async (host_id, user_id, updateData) => {
+    try {
+        console.log('Updating ESXi host:', {
+            host_id,
+            user_id,
+            updateData: {
+                ...updateData,
+                password: updateData.password ? '***' : 'not provided'
+            }
+        });
+        
+        const fields = ['updated_at = NOW()'];
+        const values = [];
+        
+        if (updateData.connection_name !== undefined) {
+            fields.push('connection_name = ?');
+            values.push(updateData.connection_name);
+        }
+        
+        if (updateData.host_ip !== undefined) {
+            fields.push('host_ip = ?');
+            values.push(updateData.host_ip);
+        }
+        
+        if (updateData.username !== undefined) {
+            fields.push('username = ?');
+            values.push(updateData.username);
+        }
+        
+        if (updateData.password !== undefined) {
+            fields.push('password = ?');
+            values.push(updateData.password); 
+        }
+        
+        if (updateData.status !== undefined) {
+            fields.push('status = ?');
+            values.push(updateData.status);
+        }
+        
+        if (updateData.installation_type !== undefined) {
+            fields.push('installation_type = ?');
+            values.push(updateData.installation_type);
+        }
+        
+        if (fields.length <= 1) { 
+            throw new Error('No data to update');
+        }
+        
+        const query = `UPDATE esxi_hosts SET ${fields.join(', ')} WHERE id = ? AND user_id = ?`;
+        values.push(host_id, user_id);
+        
+        const [result] = await db.query(query, values);
+        
+        const success = result.affectedRows > 0;
+        console.log(`ESXi host update ${success ? 'successful' : 'failed'}, affected rows: ${result.affectedRows}`);
+        
+        return { 
+            success: success,
+            affectedRows: result.affectedRows,
+            message: success ? 'ESXi host updated successfully' : 'No host found or not authorized'
+        };
+    } catch (error) {
+        console.error('Error updating ESXi host:', error);
         throw error;
     }
 };

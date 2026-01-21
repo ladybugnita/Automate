@@ -9,7 +9,7 @@ import db from "../config/db.js";
 dotenv.config({ path: path.resolve("backend/.env") });
 
 const SECRET = process.env.JWT_SECRET;
-const socket_port=8081;
+const socket_port = process.env.SOCKET_PORT || 8081;
 
 const app = express();
 const server = http.createServer(app);
@@ -40,24 +40,29 @@ function authenticateToken(token) {
 function processResponse(data, username) {
     let command = 'unknown';
     let resultData = null;
+    let error = null;
 
     if (data.response && typeof data.response === 'object') {
         if (data.response.command) {
             command = data.response.command;
             resultData = data.response.result;
+            error = data.response.error;
         }
         else if (data.response.error) {
-            command = 'unknown';
+            command = data.response.command || 'unknown';
             resultData = { status: 'error', message: data.response.error };
+            error = data.response.error;
         }
     }
     else if (data.command) {
         command = data.command;
         resultData = data.result || data.response;
+        error = data.error;
     }
     else if (data.error) {
-        command = 'unknown';
+        command = data.command || 'unknown';
         resultData = { status: 'error', message: data.error };
+        error = data.error;
     }
 
     if (typeof resultData === 'string') {
@@ -65,17 +70,18 @@ function processResponse(data, username) {
             resultData = JSON.parse(resultData);
             console.log(`Parsed result data for ${command}:`, resultData);
         } catch (parseError) {
-            console.log(`Failed to parse result as JSON, keeping as string`);
+            console.log(`Failed to parse result as JSON, keeping as string: ${resultData.substring(0, 100)}...`);
         }
     }
 
-    console.log(`Processing response for: ${command}`, resultData);
+    console.log(`Processing response for: ${command}`, { resultData, error });
 
     const frontendConn = frontendConnections.get(username);
     const responseMessage = {
         type: 'COMMAND_RESPONSE',
         command: command,
         data: resultData,
+        error: error,
         timestamp: new Date().toISOString(),
         source: 'backend'
     };
@@ -84,7 +90,7 @@ function processResponse(data, username) {
         frontendConn.send(JSON.stringify(responseMessage));
         console.log(`Response forwarded to frontend from backend: ${command}`);
     } else {
-        console.log(`No frontend connection - storing backend response`);
+        console.log(`No frontend connection for ${username} - storing backend response`);
         if (!pendingResponses.has(username)) {
             pendingResponses.set(username, []);
         }
@@ -93,7 +99,7 @@ function processResponse(data, username) {
 }
 
 wss.on("connection", async (ws, req) => {
-    console.log("New connection attempt...");
+    console.log("New WebSocket connection attempt...");
 
     try {
         const url = new URL(req.url, `http://${req.headers.host}`);
@@ -118,11 +124,12 @@ wss.on("connection", async (ws, req) => {
         ws.authenticated = true;
         ws.connectionType = null;
 
-        console.log(`Client connected: ${user.username} (awaiting classification)`);
+        console.log(`Client connected: ${user.username} (id: ${user.id}, awaiting classification)`);
 
         ws.send(JSON.stringify({
             type: "TOKEN_CONFIRMED",
             username: user.username,
+            userId: user.id,
             message: "WebSocket Connection Successful"
         }));
 
@@ -131,7 +138,7 @@ wss.on("connection", async (ws, req) => {
 
             try {
                 const message = raw.toString();
-                console.log(`[MESSAGE from ${user.username}]: ${message}`);
+                console.log(`[MESSAGE from ${user.username}]:`, message.substring(0, 200) + (message.length > 200 ? '...' : ''));
 
                 const data = JSON.parse(message);
 
@@ -144,22 +151,30 @@ wss.on("connection", async (ws, req) => {
                     if (frontendConn && frontendConn.readyState === WebSocket.OPEN) {
                         frontendConn.send(JSON.stringify({
                             type: 'AGENT_CONNECTED',
-                            message: 'backend is now connected and ready'
+                            message: 'backend is now connected and ready',
+                            userId: user.id
                         }));
                     }
 
-                    console.log(`backend auto-detected: ${user.username}`);
-
-                    console.log(`Processing initial response:`, data.response);
-
+                    console.log(`Backend auto-detected: ${user.username}`);
+                    
                     processResponse(data, user.username);
                     return;
                 }
 
                 if (data.action === "register" && !ws.connectionType) {
-                    console.log(`BACKEND REGISTERED: ${user.username}`);
+                    console.log(`BACKEND REGISTERED: ${user.username} (id: ${user.id})`);
                     agentConnections.set(user.username, ws);
                     ws.connectionType = 'agent';
+
+                    try {
+                        await db.query(
+                            "INSERT INTO agents (token, username, status, last_seen) VALUES (?, ?, 'connected', NOW()) ON DUPLICATE KEY UPDATE status='connected', last_seen=NOW(), updatedAt=NOW()",
+                            [token, user.username]
+                        );
+                    } catch (dbError) {
+                        console.error("Error updating agent status in database:", dbError.message);
+                    }
 
                     if (failedCommands.has(user.username)) {
                         const commandsToRetry = failedCommands.get(user.username);
@@ -179,34 +194,43 @@ wss.on("connection", async (ws, req) => {
                     if (frontendConn && frontendConn.readyState === WebSocket.OPEN) {
                         frontendConn.send(JSON.stringify({
                             type: 'AGENT_CONNECTED',
-                            message: 'backend is now connected and ready'
+                            message: 'backend is now connected and ready',
+                            userId: user.id
                         }));
                     }
 
                     ws.send(JSON.stringify({
                         action: "register_ack",
                         status: "success",
-                        message: "Successfully registered as backend"
+                        message: "Successfully registered as backend",
+                        userId: user.id
                     }));
 
-                    console.log(`backend registered: ${user.username}`);
+                    console.log(`Backend registered: ${user.username}`);
                     return;
                 }
 
                 if ((data.action === "response" || data.response) && ws.connectionType === 'agent') {
-                    console.log(`Response from Backend:`, data);
+                    console.log(`Response from Backend ${user.username}:`, 
+                        data.command ? `Command: ${data.command}` : 'No command specified');
+                    
+                    if (data.command === 'validate_esxi_connection_and_credentials' || 
+                        (data.response && data.response.command === 'validate_esxi_connection_and_credentials')) {
+                        console.log('Processing ESXi validation response from backend');
+                    }
+                    
                     processResponse(data, user.username);
                     return;
                 }
 
                 if (data.command && !ws.connectionType) {
-                    console.log(`Identified as FRONTEND: ${user.username}`);
+                    console.log(`Identified as FRONTEND: ${user.username} (id: ${user.id})`);
                     ws.connectionType = 'frontend';
                     frontendConnections.set(user.username, ws);
 
                     if (pendingResponses.has(user.username)) {
                         const responses = pendingResponses.get(user.username);
-                        console.log(`Sending ${responses.length} pending responses to frontend`);
+                        console.log(`Sending ${responses.length} pending responses to frontend ${user.username}`);
                         responses.forEach(response => {
                             if (ws.readyState === WebSocket.OPEN) {
                                 ws.send(JSON.stringify(response));
@@ -228,13 +252,20 @@ wss.on("connection", async (ws, req) => {
                     }
 
                     if (agentConnection && agentConnection.readyState === WebSocket.OPEN) {
-                        console.log(`Forwarding command to Backend: ${data.command}`, data.payload ? `with payload: ${JSON.stringify(data.payload)}` : '');
+                        console.log(`Forwarding command to Backend: ${data.command}`, 
+                            data.payload ? `Payload: ${JSON.stringify(data.payload).substring(0, 100)}...` : 'No payload');
+
+                        if (data.command === 'validate_esxi_connection_and_credentials') {
+                            console.log('Forwarding ESXi validation command to backend for user:', user.username);
+                        } else if (data.command.includes('esxi') || data.command.includes('vm')) {
+                            console.log('Forwarding ESXi/VM related command:', data.command);
+                        }
 
                         agentConnection.send(JSON.stringify(commandMessage));
-                        console.log(`Command sent to Backend: ${data.command}`);
+                        console.log(`Command sent to Backend ${user.username}: ${data.command}`);
 
                     } else {
-                        console.log(`No backend connection - storing command for retry`);
+                        console.log(`No backend connection for ${user.username} - storing command for retry`);
 
                         if (!failedCommands.has(user.username)) {
                             failedCommands.set(user.username, []);
@@ -244,23 +275,25 @@ wss.on("connection", async (ws, req) => {
                         ws.send(JSON.stringify({
                             type: 'WAITING_FOR_BACKEND',
                             command: data.command,
-                            message: 'backend is not connected. Command will be retried when backend reconnects.',
-                            timestamp: new Date().toISOString()
+                            message: 'Backend is not connected. Command will be retried when backend reconnects.',
+                            timestamp: new Date().toISOString(),
+                            userId: user.id
                         }));
                     }
                     return;
                 }
 
                 if (!ws.connectionType) {
-                    console.log(`Unknown message format from unclassified connection:`, data);
+                    console.log(`Unknown message format from unclassified connection ${user.username}:`, 
+                        typeof data === 'object' ? JSON.stringify(data).substring(0, 100) : data);
                 }
 
             } catch (err) {
-                console.error("Error processing message:", err);
+                console.error("Error processing message from", user.username, ":", err.message);
                 if (ws.connectionType === 'frontend') {
                     ws.send(JSON.stringify({
                         type: 'ERROR',
-                        message: 'Failed to process message'
+                        message: 'Failed to process message: ' + err.message
                     }));
                 }
             }
@@ -270,41 +303,45 @@ wss.on("connection", async (ws, req) => {
             if (!ws.authenticated) return;
 
             const username = ws.user.username;
+            const userId = ws.user.id;
             const connectionType = ws.connectionType;
 
             if (connectionType === 'agent' && agentConnections.get(username) === ws) {
                 agentConnections.delete(username);
-                console.log(`BACKEND disconnected: ${username}`);
+                console.log(`BACKEND disconnected: ${username} (id: ${userId})`);
 
                 const frontendConn = frontendConnections.get(username);
                 if (frontendConn && frontendConn.readyState === WebSocket.OPEN) {
                     frontendConn.send(JSON.stringify({
                         type: 'AGENT_DISCONNECTED',
-                        message: 'backend disconnected'
+                        message: 'Backend disconnected',
+                        userId: userId
                     }));
                 }
+
+                try {
+                    await db.query(
+                        "UPDATE agents SET status='disconnected', updatedAt=NOW() WHERE username=?",
+                        [username]
+                    );
+                } catch (dbError) {
+                    console.error("Error updating agent status on disconnect:", dbError.message);
+                }
             }
+            
             if (connectionType === 'frontend' && frontendConnections.get(username) === ws) {
                 frontendConnections.delete(username);
-                console.log(`Frontend disconnected: ${username}`);
+                console.log(`Frontend disconnected: ${username} (id: ${userId})`);
             }
 
-            try {
-                await db.query(
-                    "UPDATE agents SET status='disconnected', updatedAt=NOW() WHERE username=?",
-                    [username]
-                );
-            } catch (err) {
-                console.error("Error updating agent status:", err);
-            }
         });
 
         ws.on("error", (error) => {
-            console.error("WebSocket error:", error);
+            console.error("WebSocket error for user", ws.user?.username, ":", error.message);
         });
 
     } catch (err) {
-        console.log("Connection error:", err.message);
+        console.log("Connection setup error:", err.message);
         ws.close();
     }
 });
@@ -332,7 +369,8 @@ app.post("/api/send-command", async (req, res) => {
         }
 
         if (agentConnection && agentConnection.readyState === WebSocket.OPEN) {
-            console.log(`Forwarding HTTP command to BACKEND: ${command}`, payload ? `with payload: ${JSON.stringify(payload)}` : '');
+            console.log(`Forwarding HTTP command to BACKEND: ${command}`, 
+                payload ? `Payload: ${JSON.stringify(payload).substring(0, 100)}...` : 'No payload');
 
             agentConnection.send(JSON.stringify(commandMessage));
 
@@ -345,7 +383,7 @@ app.post("/api/send-command", async (req, res) => {
 
         return res.status(404).json({
             success: false,
-            error: "backend not connected",
+            error: "Backend not connected",
             message: "Please ensure the backend application is running and connected to the WebSocket server"
         });
 
@@ -353,7 +391,7 @@ app.post("/api/send-command", async (req, res) => {
         console.error("Error in send-command endpoint:", error);
         res.status(500).json({
             success: false,
-            error: "Internal server error"
+            error: "Internal server error: " + error.message
         });
     }
 });
@@ -376,20 +414,22 @@ app.get("/api/agent-status", async (req, res) => {
             res.json({
                 status: 'connected',
                 username: user.username,
-                message: 'backend is connected and ready'
+                userId: user.id,
+                message: 'Backend is connected and ready'
             });
         } else {
             res.json({
                 status: 'disconnected',
                 username: user.username,
-                message: 'backend is not connected'
+                userId: user.id,
+                message: 'Backend is not connected'
             });
         }
     } catch (error) {
         console.error('Error checking agent status:', error);
         res.json({
             status: 'error',
-            message: 'Failed to check agent status'
+            message: 'Failed to check agent status: ' + error.message
         });
     }
 });
@@ -402,16 +442,96 @@ app.get("/api/connection-status", (req, res) => {
         agentConnections: agentUsernames,
         frontendConnections: frontendUsernames,
         totalAgents: agentUsernames.length,
-        totalFrontends: frontendUsernames.length
+        totalFrontends: frontendUsernames.length,
+        timestamp: new Date().toISOString()
     });
+});
+
+app.post("/api/validate-esxi", async (req, res) => {
+    try {
+        const { username, esxi_info } = req.body;
+        
+        if (!username || !esxi_info || !esxi_info.ip) {
+            return res.status(400).json({ 
+                success: false,
+                error: "Username and ESXi info with IP are required" 
+            });
+        }
+
+        console.log(`ESXi validation test request for user: ${username}`, {
+            ip: esxi_info.ip,
+            username: esxi_info.username,
+            password_length: esxi_info.password ? esxi_info.password.length : 0
+        });
+
+        const isValidIP = (ip) => {
+            const ipPattern = /^(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/;
+            return ipPattern.test(ip);
+        };
+
+        if (!isValidIP(esxi_info.ip)) {
+            return res.status(400).json({
+                success: false,
+                valid: false,
+                message: 'Invalid IP address format. IP should be in format like 192.168.1.100',
+                esxi_info: {
+                    ...esxi_info,
+                    password: '***', 
+                    validated_at: new Date().toISOString().replace('T', ' ').split('.')[0]
+                }
+            });
+        }
+
+        const connectionTest = true;
+        
+        if (connectionTest) {
+            return res.json({
+                success: true,
+                valid: true,
+                message: 'ESXi connection and credentials are valid (simulated test)',
+                esxi_info: {
+                    ...esxi_info,
+                    password: '***', 
+                    validated_at: new Date().toISOString().replace('T', ' ').split('.')[0],
+                    password_received: !!esxi_info.password
+                }
+            });
+        } else {
+            return res.json({
+                success: false,
+                valid: false,
+                message: 'Failed to connect to ESXi host. Check IP and credentials.',
+                esxi_info: {
+                    ...esxi_info,
+                    password: '***', 
+                    validated_at: new Date().toISOString().replace('T', ' ').split('.')[0]
+                }
+            });
+        }
+
+    } catch (error) {
+        console.error('Error in ESXi validation test:', error);
+        res.status(500).json({
+            success: false,
+            valid: false,
+            message: `Connection test error: ${error.message}`,
+            esxi_info: req.body.esxi_info ? {
+                ...req.body.esxi_info,
+                password: '***', 
+                validated_at: new Date().toISOString().replace('T', ' ').split('.')[0]
+            } : null
+        });
+    }
 });
 
 setInterval(() => {
     const now = Date.now();
+    
     for (const [username, responses] of pendingResponses.entries()) {
         const filtered = responses.filter(resp => now - new Date(resp.timestamp).getTime() < 30000);
         if (filtered.length === 0) {
             pendingResponses.delete(username);
+            console.log(`Cleaned up pending responses for ${username}`);
         } else if (filtered.length !== responses.length) {
             pendingResponses.set(username, filtered);
         }
@@ -420,10 +540,14 @@ setInterval(() => {
     for (const [username, commands] of failedCommands.entries()) {
         if (commands.length > 10) {
             failedCommands.set(username, commands.slice(-10));
+            console.log(`Trimmed failed commands for ${username} to last 10`);
         }
     }
-}, 60000);
+}, 60000); 
 
 server.listen(socket_port, '0.0.0.0', () => {
     console.log(`WebSocket server running on port: ${socket_port}`);
+    console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
 });
+
+export { wss, agentConnections, frontendConnections };
