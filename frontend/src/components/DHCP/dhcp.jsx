@@ -115,6 +115,8 @@ const DHCP = () => {
   const [checkingStatus, setCheckingStatus] = useState(true);
   const [dhcpMachines, setDhcpMachines] = useState([]);
   const [noDhcpConfigured, setNoDhcpConfigured] = useState(false);
+  const [showNoDhcpModal, setShowNoDhcpModal] = useState(false);
+  const [error, setError] = useState(null);
   const [formData, setFormData] = useState({
     name: '',
     description: '',
@@ -131,9 +133,9 @@ const DHCP = () => {
   const listenerAdded = useRef(false);
   const installationStarted = useRef(false);
   const dhcpMachinesRef = useRef([]);
-  
   const initialCheckDoneRef = useRef(false);
   const dhcpMachineRef = useRef(null);
+  const modalClosedRef = useRef(false);
 
   useEffect(() => {
     selectedScopeRef.current = selectedScope;
@@ -164,6 +166,7 @@ const DHCP = () => {
     if (!machines || !Array.isArray(machines)) {
       console.error(' Invalid machines data received:', machines);
       setNoDhcpConfigured(true);
+      setShowNoDhcpModal(true);
       return;
     }
 
@@ -176,7 +179,8 @@ const DHCP = () => {
 
     if (dhcpMachinesList.length === 0) {
       setNoDhcpConfigured(true);
-      setError('No DHCP machine configured. Please mark a machine as DHCP in Machine Management.');
+      setShowNoDhcpModal(true);
+      setDhcpInstalled(false); 
       setCheckingStatus(false);
       setLoading(false);
       return;
@@ -185,6 +189,7 @@ const DHCP = () => {
     setDhcpMachines(dhcpMachinesList);
     dhcpMachinesRef.current = dhcpMachinesList;
     setNoDhcpConfigured(false);
+    setShowNoDhcpModal(false);
 
     if (dhcpMachinesList.length > 0) {
       dhcpMachineRef.current = dhcpMachinesList[0];
@@ -280,6 +285,7 @@ const DHCP = () => {
     
     if (error) {
       console.log(`Error from backend for command ${command}:`, error);
+      setError(`Error: ${error}`);
       setLoading(false);
       setCheckingStatus(false);
       return;
@@ -412,6 +418,7 @@ const DHCP = () => {
           }, 2000);
         } else {
           console.log('DHCP installation failed:', responseData);
+          setError(`Installation failed: ${JSON.stringify(responseData)}`);
           updateInstallationStatus('dhcp', INSTALLATION_STATUS.FAILED, 0, 'Installation failed');
           setLoading(false);
           installationStarted.current = false;
@@ -435,7 +442,6 @@ const DHCP = () => {
         
         if (scopeConfigured) {
           console.log('DHCP scope configured successfully!');
-          alert('DHCP scope created successfully!');
           
           setShowCreateModal(false);
           resetForm();
@@ -449,7 +455,7 @@ const DHCP = () => {
           }, 1000);
         } else {
           console.log('DHCP scope configuration failed:', responseData);
-          alert('Failed to create DHCP scope. Please try again.');
+          setError(`Failed to create DHCP scope: ${JSON.stringify(responseData)}`);
           setLoading(false);
         }
         break;
@@ -470,6 +476,7 @@ const DHCP = () => {
         if (removeListener) removeListener();
         listenerAdded.current = false;
         stopAutoRefresh();
+        modalClosedRef.current = false;
       };
     }
   }, [addListener, handleWebSocketMessage]);
@@ -488,6 +495,7 @@ const DHCP = () => {
       setCheckingStatus(true);
       setDhcpInstalled(null);
       setShowInstallModal(false);
+      setError(null);
       
       if (installations.dhcp?.status === INSTALLATION_STATUS.INSTALLING) {
         console.log('DHCP is installing globally, showing installation progress');
@@ -526,6 +534,8 @@ const DHCP = () => {
     if (!machine) {
       console.error('No DHCP machine found');
       setError('No DHCP machine configured');
+      setDhcpInstalled(false); 
+      setCheckingStatus(false);
       return;
     }
     
@@ -534,6 +544,8 @@ const DHCP = () => {
     if (!payload) {
       console.error('Failed to create payload for DHCP check');
       setError('Failed to create payload');
+      setDhcpInstalled(false); 
+      setCheckingStatus(false);
       return;
     }
     
@@ -742,12 +754,12 @@ const DHCP = () => {
     }
     
     if (!formData.start_range || !formData.end_range) {
-      alert('Please enter start and end IP addresses');
+      setError('Please enter start and end IP addresses');
       return;
     }
     
     if (!formData.name) {
-      alert('Please enter a scope name');
+      setError('Please enter a scope name');
       return;
     }
     
@@ -762,13 +774,14 @@ const DHCP = () => {
     });
     
     if (!payload) {
-      alert('Failed to create payload. Check machine configuration.');
+      setError('Failed to create payload. Check machine configuration.');
       return;
     }
     
     console.log('Payload:', payload);
     
     setLoading(true);
+    setError(null);
     
     sendCommand('configure_dhcp_scope_windows_ansible', payload);
   };
@@ -797,11 +810,12 @@ const DHCP = () => {
     
     const payload = createPayload();
     if (!payload) {
-      alert('Failed to create payload. Check machine configuration.');
+      setError('Failed to create payload. Check machine configuration.');
       return;
     }
     
     setLoading(true);
+    setError(null);
     installationStarted.current = true;
     
     updateInstallationStatus('dhcp', INSTALLATION_STATUS.INSTALLING, 0, 'Starting DHCP installation...');
@@ -812,6 +826,7 @@ const DHCP = () => {
   const checkDHCPAgain = () => {
     console.log('Checking DHCP status again...');
     setCheckingStatus(true);
+    setError(null);
     initialCheckDone.current = false;
     
     setTimeout(() => {
@@ -821,13 +836,13 @@ const DHCP = () => {
 
   const deleteScope = () => {
     if (!selectedScope) {
-      alert('No scope selected');
+      setError('No scope selected');
       return;
     }
     
     if (window.confirm(`Are you sure you want to delete scope "${selectedScope}"?`)) {
       console.log(`Delete scope functionality needs to be implemented with backend`);
-      alert('Delete functionality requires backend implementation');
+      setError('Delete functionality requires backend implementation');
     }
   };
 
@@ -854,6 +869,7 @@ const DHCP = () => {
       end_range: ''
     });
     setCurrentStep(1);
+    setError(null);
   };
 
   const handleFormChange = (e) => {
@@ -891,7 +907,147 @@ const DHCP = () => {
     );
   };
 
-  if (checkingStatus) {
+  const handleCloseNoDhcpModal = () => {
+    console.log('Closing No DHCP modal');
+    setShowNoDhcpModal(false);
+    setDhcpInstalled(false); 
+    modalClosedRef.current = true;
+  };
+
+  const handleCloseInstallModal = () => {
+    console.log('Closing Install modal');
+    setShowInstallModal(false);
+    setDhcpInstalled(false); 
+    modalClosedRef.current = true;
+  };
+
+  const renderNoDHCPConfiguredModal = () => {
+    if (!showNoDhcpModal) return null;
+
+    return (
+      <div className="dhcp-install-modal-overlay">
+        <div className="dhcp-install-modal">
+          <div className="modal-header">
+            <h2><div style={{ color: 'red', fontSize: '17px' }}>DHCP Server Configuration Required!</div></h2>
+            <button 
+              className="btn-close-modal"
+              onClick={handleCloseNoDhcpModal}
+            >
+              ×
+            </button>
+          </div>
+          <div className="modal-content">
+            <div className="warning-icon">
+              <i className="fas fa-exclamation-triangle fa-3x" style={{ color: '#ff9800' }}></i>
+            </div>
+            <h3>No DHCP Machine Configured</h3>
+            <p>Please mark a machine as DHCP in Machine Management first.</p>
+            
+            <div className="warning-note">
+              <i className="fas fa-info-circle"></i>
+              <div>
+                <p className="note-title">Steps to configure:</p>
+                <ol>
+                  <li>Go to <strong>Machine Management</strong></li>
+                  <li>Select a machine and mark it with <strong>DHCP role</strong></li>
+                  <li>Return to this page</li>
+                  <li>The DHCP configuration will be available automatically</li>
+                </ol>
+              </div>
+            </div>
+            
+            <div className="connection-status-small">
+              <span className={`status-indicator ${isConnected ? 'connected' : 'disconnected'}`}></span>
+              WebSocket: {isConnected ? 'Connected' : 'Disconnected'}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const renderInstallModal = () => {
+    if (!showInstallModal || showNoDhcpModal) return null;
+    
+    const machine = getMachineByType();
+    
+    if (!machine) {
+      return null;
+    }
+
+    return (
+      <div className="dhcp-install-modal-overlay">
+        <div className="dhcp-install-modal">
+          <div className="modal-header">
+            <h2><div style={{ color: 'red', fontSize: '17px' }}>DHCP Server Required!</div></h2>
+            <button 
+              className="btn-close-modal"
+              onClick={handleCloseInstallModal}
+              disabled={installations.dhcp?.status === INSTALLATION_STATUS.INSTALLING || loading}
+            >
+              ×
+            </button>
+          </div>
+          <div className="modal-content">
+            <div className="warning-icon">
+              <i className="fas fa-exclamation-triangle fa-3x" style={{ color: '#ff9800' }}></i>
+            </div>
+            <h3>DHCP Server Not Installed</h3>
+            <p>The DHCP server role is not installed on this system. You need to install it to manage DHCP scopes.</p>
+            
+            <div className="warning-note">
+              <i className="fas fa-info-circle"></i>
+              <div>
+                <p className="note-title">Important Information:</p>
+                <ul>
+                  <li>This will install Windows DHCP Server role via Ansible</li>
+                  <li>System restart may be required</li>
+                  <li>Ensure you have administrator privileges</li>
+                  <li>Installation may take several minutes</li>
+                  <li>The role will be permanently installed</li>
+                  <li>Using credentials from database for the machine</li>
+                </ul>
+              </div>
+            </div>
+            
+            {renderMachineInfo()}
+            
+            <div className="connection-status-small">
+              <span className={`status-indicator ${isConnected ? 'connected' : 'disconnected'}`}></span>
+              WebSocket: {isConnected ? 'Connected' : 'Disconnected'}
+            </div>
+            
+          </div>
+          <div className="modal-footer">
+            <button 
+              className="btn-primary" 
+              onClick={installDHCP}
+              disabled={!isConnected || installations.dhcp?.status === INSTALLATION_STATUS.INSTALLING || checkingStatus || loading}
+            >
+              {installations.dhcp?.status === INSTALLATION_STATUS.INSTALLING || loading ? (
+                <>
+                  <div className="mini-spinner"></div> Installing...
+                </>
+              ) : (
+                <>
+                  <i className="fas fa-download"></i> Install DHCP Server
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const shouldShowLoading = () => {
+    if (modalClosedRef.current) return false;
+    if (checkingStatus) return true;
+    if (dhcpInstalled === null && !showNoDhcpModal && !showInstallModal) return true;
+    return false;
+  };
+
+  if (shouldShowLoading()) {
     return (
       <div className="dhcp-loading">
         <div className="spinner"></div>
@@ -942,103 +1098,34 @@ const DHCP = () => {
     );
   }
 
-  if (!dhcpInstalled && showInstallModal) {
-    const machine = getMachineByType();
-    
-    if (!machine) {
-      return (
-        <div className="dhcp-install-modal-overlay">
-          <div className="dhcp-install-modal">
-            <div className="modal-header">
-              <h2><div style={{ color: 'red', fontSize: '17px' }}>DHCP Server Configuration Required!</div></h2>
-            </div>
-            <div className="modal-content">
-              <div className="warning-icon">
-                <i className="fas fa-exclamation-triangle"></i>
-              </div>
-              <h3>No DHCP Machine Configured</h3>
-              <p>Please mark a machine as DHCP in Machine Management first.</p>
-              
-              <div className="warning-note">
-                <i className="fas fa-info-circle"></i>
-                <div>
-                  <p className="note-title">Note:</p>
-                  <p>Go to Machine Management → Mark a machine with DHCP role → Return to this page</p>
-                </div>
-              </div>
-            </div>
-            <div className="modal-footer">
-              <button className="btn-secondary" onClick={checkDHCPAgain} disabled={checkingStatus || loading}>
-                <i className="fas fa-sync-alt"></i> 
-                {checkingStatus ? 'Checking...' : 'Check Again'}
-              </button>
-            </div>
-          </div>
-        </div>
-      );
-    }
+  if (noDhcpConfigured && showNoDhcpModal) {
+    return renderNoDHCPConfiguredModal();
+  }
 
-    return (
-      <div className="dhcp-install-modal-overlay">
-        <div className="dhcp-install-modal">
-          <div className="modal-header">
-            <h2><div style={{ color: 'red', fontSize: '17px' }}>DHCP Server Required!</div></h2>
-          </div>
-          <div className="modal-content">
-            <div className="warning-icon">
-              <i className="fas fa-exclamation-triangle"></i>
-            </div>
-            <h3>DHCP Server Not Installed</h3>
-            <p>The DHCP server role is not installed on this system. You need to install it to manage DHCP scopes.</p>
-            
-            <div className="warning-note">
-              <i className="fas fa-info-circle"></i>
-              <div>
-                <p className="note-title">Note:</p>
-                <p>Installing the DHCP server may require a system restart. Ensure you save all work before proceeding.</p>
-              </div>
-            </div>
-            
-            <div className="connection-info">
-              <h4>Target Server Details</h4>
-              {renderMachineInfo()}
-              <div className="windows-connection-details">
-                <p><strong>WebSocket Status:</strong> {isConnected ? 'Connected' : 'Disconnected'}</p>
-              </div>
-            </div>
-            
-          </div>
-          <div className="modal-footer">
-            <button className="btn-secondary" onClick={checkDHCPAgain} disabled={checkingStatus || loading}>
-              <i className="fas fa-sync-alt"></i> 
-              {checkingStatus ? 'Checking...' : 'Check Again'}
-            </button>
-            <button 
-              className="btn-primary" 
-              onClick={installDHCP}
-              disabled={!isConnected || installations.dhcp?.status === INSTALLATION_STATUS.INSTALLING || checkingStatus || loading}
-            >
-              {installations.dhcp?.status === INSTALLATION_STATUS.INSTALLING || loading ? (
-                <>
-                  <div className="mini-spinner"></div> Installing...
-                </>
-              ) : (
-                <>
-                  <i className="fas fa-download"></i> Install DHCP Server
-                </>
-              )}
-            </button>
-          </div>
-        </div>
-      </div>
-    );
+  if (showInstallModal && !dhcpInstalled) {
+    return renderInstallModal();
   }
 
   if (dhcpInstalled === null && !checkingStatus) {
     return (
-      <div className="dhcp-loading">
-        <div className="spinner"></div>
-        <p>Loading DHCP...</p>
+      <div className="dhcp-empty-state">
+        <div className="empty-icon">
+          <i className="fas fa-dhcp fa-4x"></i>
+        </div>
+        <h2>DHCP Configuration</h2>
+        <p>No DHCP machine is configured. Please mark a machine as DHCP in Machine Management.</p>
+        <button 
+          className="btn-primary"
+          onClick={() => {
+            modalClosedRef.current = false;
+            setCheckingStatus(true);
+            setDhcpInstalled(null);
+            initialCheckDone.current = false;
+            getDhcpMachinesFromDatabase();
+          }}
+        >
+          <i className="fas fa-sync-alt"></i> Check Again
+        </button>
       </div>
     );
   }
@@ -1047,6 +1134,19 @@ const DHCP = () => {
 
   return (
     <div className="dhcp-container">
+      {renderNoDHCPConfiguredModal()}
+      {renderInstallModal()}
+      
+      {error && (
+        <div className="error-message" style={{ position: 'fixed', top: '20px', right: '20px', zIndex: 1000 }}>
+          <div className="error-icon">⚠️</div>
+          <div className="error-text">{error}</div>
+          <button className="btn-close-error" onClick={() => setError(null)}>
+            ×
+          </button>
+        </div>
+      )}
+      
       {showCreateModal && (
         <div className="modal-overlay">
           <div className="create-scope-modal">
