@@ -352,7 +352,6 @@
   line-height: 1.6;
 }
 
-/* Zone List Container Improvements */
 .zone-list-container {
   padding: var(--spacing-2);
 }
@@ -469,7 +468,6 @@
   margin: 0;
 }
 
-/* Zone Table Container - IMPROVED SPACING */
 .zone-table-container {
   overflow-x: auto;
   border-radius: var(--border-radius-lg);
@@ -550,7 +548,6 @@
   padding: 2px 6px;
 }
 
-/* Machine Badge */
 .machine-badge {
   display: inline-flex;
   align-items: center;
@@ -576,7 +573,6 @@
   border-color: #e0f2fe;
 }
 
-/* Zone Actions Cell - IMPROVED BUTTON SPACING */
 .zone-actions-cell {
   display: flex;
   gap: var(--spacing-3);
@@ -661,7 +657,6 @@
   outline-offset: 2px;
 }
 
-/* Records Container */
 .records-container {
   padding: var(--spacing-2);
 }
@@ -797,7 +792,6 @@
   margin: 0;
 }
 
-/* Records Table - IMPROVED SPACING */
 .records-table-container {
   overflow-x: auto;
   border-radius: var(--border-radius-lg);
@@ -851,7 +845,6 @@
   background: var(--info-lightest);
 }
 
-/* Record Type Badge */
 .record-type-badge {
   display: inline-flex;
   align-items: center;
@@ -929,7 +922,6 @@
   font-style: italic;
 }
 
-/* Machine Info Panel */
 .machine-info-panel {
   background: var(--white);
   border: 1px solid var(--gray-200);
@@ -2116,7 +2108,6 @@ textarea.form-control {
   }
 }
 
-/* DNS Machine Selector */
 .dns-machine-selector {
   margin-right: 20px;
   display: flex;
@@ -2148,7 +2139,6 @@ textarea.form-control {
   box-shadow: 0 0 0 3px rgba(22, 101, 52, 0.1);
 }
 
-/* No DNS Configuration State */
 .dns-no-configuration {
   padding: var(--spacing-12) var(--spacing-6);
   text-align: center;
@@ -2226,82 +2216,79 @@ textarea.form-control {
   position: relative;
 }
 
-/* Column widths for better spacing */
 .zone-table th:nth-child(1),
-.zone-table td:nth-child(1) { /* Zone Name */
+.zone-table td:nth-child(1) { 
   min-width: 250px;
   max-width: 350px;
 }
 
 .zone-table th:nth-child(2),
-.zone-table td:nth-child(2) { /* Type */
+.zone-table td:nth-child(2) { 
   min-width: 120px;
   max-width: 150px;
 }
 
 .zone-table th:nth-child(3),
-.zone-table td:nth-child(3) { /* Machine */
+.zone-table td:nth-child(3) { 
   min-width: 200px;
   max-width: 250px;
 }
 
 .zone-table th:nth-child(4),
-.zone-table td:nth-child(4) { /* Records */
+.zone-table td:nth-child(4) { 
   min-width: 100px;
   max-width: 120px;
   text-align: center;
 }
 
 .zone-table th:nth-child(5),
-.zone-table td:nth-child(5) { /* Dynamic Updates */
+.zone-table td:nth-child(5) { 
   min-width: 150px;
   max-width: 180px;
 }
 
 .zone-table th:nth-child(6),
-.zone-table td:nth-child(6) { /* Actions */
+.zone-table td:nth-child(6) { 
   min-width: 220px;
   max-width: 250px;
 }
 
-/* Records table column widths */
 .records-table th:nth-child(1),
-.records-table td:nth-child(1) { /* Name */
+.records-table td:nth-child(1) {
   min-width: 200px;
   max-width: 250px;
 }
 
 .records-table th:nth-child(2),
-.records-table td:nth-child(2) { /* Type */
+.records-table td:nth-child(2) { 
   min-width: 100px;
   max-width: 120px;
 }
 
 .records-table th:nth-child(3),
-.records-table td:nth-child(3) { /* Data */
+.records-table td:nth-child(3) { 
   min-width: 300px;
   max-width: 400px;
 }
 
 .records-table th:nth-child(4),
-.records-table td:nth-child(4) { /* TTL */
+.records-table td:nth-child(4) {
   min-width: 120px;
   max-width: 150px;
 }
 
 .records-table th:nth-child(5),
-.records-table td:nth-child(5) { /* Priority */
+.records-table td:nth-child(5) { 
   min-width: 100px;
   max-width: 120px;
 }
 
 .records-table th:nth-child(6),
-.records-table td:nth-child(6) { /* Machine */
+.records-table td:nth-child(6) { 
   min-width: 150px;
   max-width: 180px;
 }
 
-/* Button disabled states */
 button:disabled,
 button[disabled] {
   opacity: 0.6;
@@ -2309,28 +2296,23 @@ button[disabled] {
   pointer-events: none !important;
 }
 
-/* Remove default button focus outline and add custom */
 button:focus {
   outline: 2px solid rgba(22, 101, 52, 0.5);
   outline-offset: 2px;
 }
 
-/* Smooth transitions for all buttons */
 button {
   transition: all 0.2s ease-in-out;
 }
 
-/* Prevent text selection on buttons */
 button {
   user-select: none;
 }
 
-/* Improve button active states */
 button:active:not(:disabled) {
   transform: translateY(1px);
 }
 
-/* Better hover effects for all buttons */
 .nav-button:hover,
 .btn-create-zone:hover:not(:disabled),
 .btn-refresh-zones:hover:not(:disabled),
@@ -2347,7 +2329,6 @@ button:active:not(:disabled) {
   box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
 }
 
-/* Active state without white flash */
 .nav-button:active:not(:disabled),
 .btn-create-zone:active:not(:disabled),
 .btn-refresh-zones:active:not(:disabled),
@@ -2364,7 +2345,6 @@ button:active:not(:disabled) {
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
 }
 
-/* Modal button states */
 .btn-cancel:active:not(:disabled) {
   background: var(--gray-300);
   border-color: var(--gray-500);
@@ -2376,18 +2356,15 @@ button:active:not(:disabled) {
   background: linear-gradient(135deg, #0d4527, var(--primary-dark));
 }
 
-/* Button focus states */
 button:focus-visible {
   outline: 2px solid rgba(22, 101, 52, 0.7);
   outline-offset: 2px;
 }
 
-/* Remove default browser button styling */
 button {
   -webkit-tap-highlight-color: transparent;
 }
 
-/* Smooth button animations */
 @keyframes buttonPress {
   0% { transform: scale(1); }
   50% { transform: scale(0.98); }
@@ -2398,7 +2375,6 @@ button:active:not(:disabled) {
   animation: buttonPress 0.1s ease;
 }
 
-/* Ensure buttons maintain their colors during all states */
 .btn-create-zone,
 .btn-install-dns,
 .btn-fetch-details,
@@ -2411,7 +2387,6 @@ button:active:not(:disabled) {
   background-clip: padding-box;
 }
 
-/* Fix for gradient buttons on active state */
 .btn-create-zone:active:not(:disabled),
 .btn-install-dns:active:not(:disabled),
 .btn-fetch-details:active:not(:disabled),

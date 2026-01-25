@@ -54,7 +54,6 @@ function DNSConfiguration() {
     targetMachine: 'primary'
   });
 
-  // Refs for tracking state
   const initialCheckDone = useRef(false);
   const listenerAdded = useRef(false);
   const dnsMachinesRef = useRef([]);
@@ -83,7 +82,6 @@ function DNSConfiguration() {
     'Active Directory', 'Routing'
   ];
 
-  // Update refs when state changes
   useEffect(() => {
     zonesDataRef.current = zones;
   }, [zones]);
@@ -92,7 +90,6 @@ function DNSConfiguration() {
     dnsDetailsRef.current = dnsDetails;
   }, [dnsDetails]);
 
-  // Clean up timeouts on unmount
   useEffect(() => {
     return () => {
       if (refreshTimeoutRef.current) {
@@ -120,15 +117,15 @@ function DNSConfiguration() {
   };
 
   const getDnsMachinesFromDatabase = () => {
-    console.log('📡 Fetching DNS machines from database...');
+    console.log('Fetching DNS machines from database...');
     sendCommand('get_machine_info', {});
   };
 
   const processDnsMachines = (machines) => {
-    console.log('🖥️ Processing DNS machines:', machines);
+    console.log('Processing DNS machines:', machines);
     
     if (!machines || !Array.isArray(machines)) {
-      console.error('❌ Invalid machines data received:', machines);
+      console.error('Invalid machines data received:', machines);
       setNoDnsConfigured(true);
       setShowNoDnsModal(true);
       return;
@@ -139,7 +136,7 @@ function DNSConfiguration() {
              machine.marked_as.some(mark => mark.role === 'dns');
     });
 
-    console.log('✅ DNS machines found:', dnsMachinesList);
+    console.log('DNS machines found:', dnsMachinesList);
 
     if (dnsMachinesList.length === 0) {
       setNoDnsConfigured(true);
@@ -169,14 +166,14 @@ function DNSConfiguration() {
 
   const getWindowsInfoForMachine = (machine) => {
     if (!machine) {
-      console.error('❌ No machine provided to getWindowsInfoForMachine');
+      console.error('No machine provided to getWindowsInfoForMachine');
       return null;
     }
     
-    console.log(`🖥️ Getting Windows info for machine: ${machine.name} (${machine.ip})`);
+    console.log(`Getting Windows info for machine: ${machine.name} (${machine.ip})`);
     
     if (!machine.password) {
-      console.error('❌ No password found for machine:', machine.name);
+      console.error('No password found for machine:', machine.name);
       return null;
     }
     
@@ -198,17 +195,17 @@ function DNSConfiguration() {
     const machine = getMachineByType(targetMachine);
     
     if (!machine) {
-      console.error(`❌ No ${targetMachine} DNS machine found`);
+      console.error(`No ${targetMachine} DNS machine found`);
       return null;
     }
     
     const windowsInfo = getWindowsInfoForMachine(machine);
     if (!windowsInfo) {
-      console.error(`❌ Failed to get Windows info for ${targetMachine} machine:`, machine.name);
+      console.error(`Failed to get Windows info for ${targetMachine} machine:`, machine.name);
       return null;
     }
     
-    console.log(`📦 Creating payload for ${targetMachine} machine:`, machine.name);
+    console.log(`Creating payload for ${targetMachine} machine:`, machine.name);
     
     return {
       windows_info: windowsInfo,
@@ -221,7 +218,7 @@ function DNSConfiguration() {
     const secondaryMachine = getMachineByType('secondary');
     
     if (!primaryMachine && !secondaryMachine) {
-      console.error('❌ No DNS machines found');
+      console.error('No DNS machines found');
       return null;
     }
     
@@ -231,7 +228,7 @@ function DNSConfiguration() {
       ...additionalData
     };
     
-    console.log('📦 Creating dual payload:', {
+    console.log('Creating dual payload:', {
       hasPrimary: !!primaryMachine,
       hasSecondary: !!secondaryMachine
     });
@@ -239,32 +236,27 @@ function DNSConfiguration() {
     return payload;
   };
 
-  // Helper function to normalize zone names (remove trailing dots)
   const normalizeZoneName = (zoneName) => {
     if (!zoneName) return '';
-    // Remove trailing dot if present
     return zoneName.endsWith('.') ? zoneName.slice(0, -1) : zoneName;
   };
 
   const processZonesFromDetails = useCallback((details, machineType) => {
-    console.log(`🔄 Processing zones for ${machineType}:`, details);
+    console.log(`Processing zones for ${machineType}:`, details);
     
     const forwardZones = [];
     const reverseZones = [];
     
-    // Extract forward zones
     if (details.forward_zones) {
-      console.log(`📂 Found forward zones for ${machineType}:`, Object.keys(details.forward_zones));
+      console.log(`Found forward zones for ${machineType}:`, Object.keys(details.forward_zones));
       
       Object.entries(details.forward_zones).forEach(([zoneKey, zoneData]) => {
         try {
-          // Zone name could be in different properties
           const rawZoneName = zoneData.name || zoneData.zone_name || zoneKey;
           const zoneName = normalizeZoneName(rawZoneName);
           const zoneType = zoneData.zone_type || zoneData.type || zoneData['zone-type'] || 'Primary';
           const dynamicUpdate = zoneData.dynamic_update || zoneData.dynamic_update_type || 'None';
           
-          // Calculate record count
           let recordCount = 0;
           if (zoneData.records) {
             Object.values(zoneData.records).forEach(recordTypeObj => {
@@ -284,16 +276,15 @@ function DNSConfiguration() {
             machine: machineType
           });
           
-          console.log(`➕ Added forward zone: ${zoneName} (${recordCount} records)`);
+          console.log(`Added forward zone: ${zoneName} (${recordCount} records)`);
         } catch (err) {
-          console.error(`❌ Error processing forward zone ${zoneKey}:`, err);
+          console.error(`Error processing forward zone ${zoneKey}:`, err);
         }
       });
     }
     
-    // Extract reverse zones
     if (details.reverse_zones) {
-      console.log(`📂 Found reverse zones for ${machineType}:`, Object.keys(details.reverse_zones));
+      console.log(`Found reverse zones for ${machineType}:`, Object.keys(details.reverse_zones));
       
       Object.entries(details.reverse_zones).forEach(([zoneKey, zoneData]) => {
         try {
@@ -321,14 +312,14 @@ function DNSConfiguration() {
             machine: machineType
           });
           
-          console.log(`➕ Added reverse zone: ${zoneName} (${recordCount} records)`);
+          console.log(`Added reverse zone: ${zoneName} (${recordCount} records)`);
         } catch (err) {
-          console.error(`❌ Error processing reverse zone ${zoneKey}:`, err);
+          console.error(`Error processing reverse zone ${zoneKey}:`, err);
         }
       });
     }
     
-    console.log(`✅ Processed ${machineType} zones - Forward: ${forwardZones.length}, Reverse: ${reverseZones.length}`);
+    console.log(`Processed ${machineType} zones - Forward: ${forwardZones.length}, Reverse: ${reverseZones.length}`);
     
     return {
       forward: forwardZones,
@@ -336,11 +327,10 @@ function DNSConfiguration() {
     };
   }, []);
 
-  // FIX: Define forceRefreshDNSData before fetchZoneRecords to avoid circular dependency
   const forceRefreshDNSData = useCallback(() => {
     return new Promise((resolve) => {
       if (pendingRefreshRef.current) {
-        console.log('⚠️ Refresh already in progress, skipping');
+        console.log('Refresh already in progress, skipping');
         resolve(false);
         return;
       }
@@ -348,21 +338,19 @@ function DNSConfiguration() {
       pendingRefreshRef.current = true;
       retryCountRef.current = 0;
       
-      console.log('🔄 Starting forced DNS data refresh...');
+      console.log('Starting forced DNS data refresh...');
       performDNSRefresh(resolve);
     });
   }, []);
 
-  // FIX: Move fetchZoneRecords after forceRefreshDNSData definition
   const fetchZoneRecords = useCallback((zoneName, machineType, zoneType = null, forceRefresh = false, keepNewRecords = true) => {
-    console.log(`🔍 Fetching records for zone: ${zoneName} (${machineType})`);
+    console.log(`Fetching records for zone: ${zoneName} (${machineType})`);
     
     if (!zoneName || !machineType) {
-      console.error('❌ Missing zone name or machine type');
+      console.error('Missing zone name or machine type');
       return;
     }
     
-    // Update selected zone with zone type
     const detectedZoneType = zoneType || (zoneName.includes('in-addr.arpa') ? 'reverse' : 'forward');
     setSelectedZone({ 
       machine: machineType, 
@@ -372,12 +360,10 @@ function DNSConfiguration() {
     
     setRecordsLoading(true);
     
-    // Use the current DNS details from ref
     const details = dnsDetailsRef.current[machineType];
     if (!details) {
-      console.log(`⚠️ No DNS details available for ${machineType}, fetching fresh data...`);
+      console.log(`No DNS details available for ${machineType}, fetching fresh data...`);
       forceRefreshDNSData().then(() => {
-        // Try again after refresh
         setTimeout(() => {
           fetchZoneRecords(zoneName, machineType, zoneType, true, keepNewRecords);
         }, 1000);
@@ -389,7 +375,6 @@ function DNSConfiguration() {
     let foundZone = false;
     const normalizedZoneName = normalizeZoneName(zoneName);
     
-    // FIXED: Improved record extraction logic
     const searchInZones = (zonesDict) => {
       if (!zonesDict) return;
       
@@ -399,18 +384,16 @@ function DNSConfiguration() {
         
         if (normalizedCurrentZoneName === normalizedZoneName || zoneKey === zoneName) {
           foundZone = true;
-          console.log(`✅ Found zone: ${currentZoneName}`, zoneData);
+          console.log(`Found zone: ${currentZoneName}`, zoneData);
           
           if (zoneData.records) {
             Object.entries(zoneData.records).forEach(([recordType, recordTypeObj]) => {
               if (recordTypeObj && typeof recordTypeObj === 'object') {
                 Object.entries(recordTypeObj).forEach(([recordKey, recordData]) => {
-                  // Handle different record data structures
                   const recordValue = recordData.value || recordData.data || 
                                     recordData.host_name || recordData.host_name || 
                                     recordData.name || '';
                   
-                  // Generate a stable ID for the record
                   const recordId = `${machineType}-${zoneKey}-${recordType}-${recordKey}-${Date.now()}`;
                   allRecords.push({
                     id: recordId,
@@ -431,18 +414,14 @@ function DNSConfiguration() {
       });
     };
     
-    // Search in forward zones
     searchInZones(details.forward_zones);
     
-    // Search in reverse zones
     searchInZones(details.reverse_zones);
     
-    // FIXED: Add pending/newly created records for this zone
     if (keepNewRecords) {
       newlyCreatedRecords.forEach(newRecord => {
         const normalizedNewRecordZone = normalizeZoneName(newRecord.zone);
         if (normalizedNewRecordZone === normalizedZoneName && newRecord.machine === machineType) {
-          // Check if this record is already in the list from backend
           const alreadyInBackend = allRecords.some(record => 
             normalizeZoneName(record.name) === normalizeZoneName(newRecord.name) &&
             record.machine === newRecord.machine &&
@@ -453,7 +432,6 @@ function DNSConfiguration() {
           if (!alreadyInBackend) {
             const newRecordId = `new-${machineType}-${normalizedZoneName}-${newRecord.name}-${newRecord.type}-${newRecord.timestamp}`;
             
-            // Check if we've recently added this record
             if (!recentlyCreatedRecordIds.current.has(newRecordId)) {
               allRecords.push({
                 id: newRecordId,
@@ -467,10 +445,8 @@ function DNSConfiguration() {
                 isNewlyCreated: true
               });
               
-              // Track this ID
               recentlyCreatedRecordIds.current.add(newRecordId);
               
-              // Clean up after 30 seconds
               setTimeout(() => {
                 recentlyCreatedRecordIds.current.delete(newRecordId);
               }, 30000);
@@ -481,15 +457,14 @@ function DNSConfiguration() {
     }
     
     if (!foundZone && allRecords.length === 0) {
-      console.warn(`⚠️ Zone ${zoneName} not found in ${machineType} details.`);
+      console.warn(`Zone ${zoneName} not found in ${machineType} details.`);
       console.log('Available zones:', {
         forward: details.forward_zones ? Object.keys(details.forward_zones) : [],
         reverse: details.reverse_zones ? Object.keys(details.reverse_zones) : []
       });
     } else {
-      console.log(`📊 Found ${allRecords.length} records for zone ${zoneName}`);
+      console.log(`Found ${allRecords.length} records for zone ${zoneName}`);
       
-      // Remove duplicates based on name, type, data, and machine
       const uniqueRecords = [];
       const seen = new Set();
       
@@ -501,20 +476,19 @@ function DNSConfiguration() {
         }
       });
       
-      console.log(`📊 After deduplication: ${uniqueRecords.length} unique records`);
+      console.log(`After deduplication: ${uniqueRecords.length} unique records`);
       setRecords(uniqueRecords);
     }
     
     setRecordsLoading(false);
     
-    // Reset record refresh attempts
     recordRefreshAttemptsRef.current = 0;
     
   }, [newlyCreatedRecords, forceRefreshDNSData]);
 
   const performDNSRefresh = useCallback((resolve) => {
     if (!isConnected) {
-      console.error('❌ WebSocket not connected');
+      console.error('WebSocket not connected');
       setError('WebSocket not connected.');
       pendingRefreshRef.current = false;
       if (resolve) resolve(false);
@@ -525,14 +499,14 @@ function DNSConfiguration() {
     const secondaryMachine = getMachineByType('secondary');
     
     if (!primaryMachine && !secondaryMachine) {
-      console.error('❌ No DNS machines available');
+      console.error('No DNS machines available');
       setError('No DNS machines available.');
       pendingRefreshRef.current = false;
       if (resolve) resolve(false);
       return;
     }
 
-    console.log(`🔄 Refreshing DNS data (attempt ${retryCountRef.current + 1}/${maxRetries})...`);
+    console.log(`Refreshing DNS data (attempt ${retryCountRef.current + 1}/${maxRetries})...`);
     
     setRefreshing(true);
     setError(null);
@@ -540,7 +514,7 @@ function DNSConfiguration() {
     
     const payload = createDualPayload();
     if (!payload) {
-      console.error('❌ Failed to create payload');
+      console.error('Failed to create payload');
       setError('Failed to create payload');
       setRefreshing(false);
       pendingRefreshRef.current = false;
@@ -548,19 +522,18 @@ function DNSConfiguration() {
       return;
     }
     
-    console.log('📤 SENDING COMMAND: get_dns_details_windows_ansible');
+    console.log('SENDING COMMAND: get_dns_details_windows_ansible');
     
     sendCommand('get_dns_details_windows_ansible', payload);
     lastCommandTimeRef.current = new Date();
     
-    // Set timeout to retry if no response
     setTimeout(() => {
       if (pendingRefreshRef.current && retryCountRef.current < maxRetries) {
         retryCountRef.current++;
-        console.log(`⏳ No response, retrying (${retryCountRef.current}/${maxRetries})...`);
+        console.log(`No response, retrying (${retryCountRef.current}/${maxRetries})...`);
         performDNSRefresh(resolve);
       } else if (pendingRefreshRef.current) {
-        console.error('❌ Max retries reached, giving up');
+        console.error('Max retries reached, giving up');
         setError('Failed to refresh DNS data after multiple attempts. Please try again.');
         setRefreshing(false);
         pendingRefreshRef.current = false;
@@ -569,37 +542,32 @@ function DNSConfiguration() {
     }, 5000);
   }, [isConnected, sendCommand]);
 
-  // FIX: Define refreshDNSData after forceRefreshDNSData
   const refreshDNSData = () => {
     forceRefreshDNSData();
   };
 
-  // FIXED: Enhanced processDNSDetails function
   const processDNSDetails = useCallback((responseData, machineType = null) => {
-    console.log('🔄 Processing DNS details response:', responseData);
+    console.log('Processing DNS details response:', responseData);
     
     if (!responseData) {
-      console.log('⚠️ No response data to process');
+      console.log('No response data to process');
       return;
     }
     
-    // Reset retry count on successful response
     retryCountRef.current = 0;
     
-    // Clear any pending refresh timeout
     if (refreshTimeoutRef.current) {
       clearTimeout(refreshTimeoutRef.current);
       refreshTimeoutRef.current = null;
     }
     
-    // Handle dual machine response (this is what we get from backend)
     if (responseData.primary_dns_details || responseData.secondary_dns_details) {
-      console.log('📊 Found dual machine DNS details structure');
+      console.log('Found dual machine DNS details structure');
       
       const updates = {};
       
       if (responseData.primary_dns_details) {
-        console.log('🔍 Processing primary DNS details...');
+        console.log('Processing primary DNS details...');
         console.log('Primary forward zones keys:', Object.keys(responseData.primary_dns_details.forward_zones || {}));
         console.log('Primary reverse zones keys:', Object.keys(responseData.primary_dns_details.reverse_zones || {}));
         
@@ -608,11 +576,11 @@ function DNSConfiguration() {
           details: responseData.primary_dns_details,
           zones: primaryZones
         };
-        console.log('📋 Primary zones processed - Forward:', primaryZones.forward.length, 'Reverse:', primaryZones.reverse.length);
+        console.log('Primary zones processed - Forward:', primaryZones.forward.length, 'Reverse:', primaryZones.reverse.length);
       }
       
       if (responseData.secondary_dns_details) {
-        console.log('🔍 Processing secondary DNS details...');
+        console.log('Processing secondary DNS details...');
         console.log('Secondary forward zones keys:', Object.keys(responseData.secondary_dns_details.forward_zones || {}));
         console.log('Secondary reverse zones keys:', Object.keys(responseData.secondary_dns_details.reverse_zones || {}));
         
@@ -621,10 +589,9 @@ function DNSConfiguration() {
           details: responseData.secondary_dns_details,
           zones: secondaryZones
         };
-        console.log('📋 Secondary zones processed - Forward:', secondaryZones.forward.length, 'Reverse:', secondaryZones.reverse.length);
+        console.log('Secondary zones processed - Forward:', secondaryZones.forward.length, 'Reverse:', secondaryZones.reverse.length);
       }
       
-      // Update state with functional updates
       setDnsDetails(prev => {
         const newDetails = {
           primary: updates.primary?.details || prev.primary,
@@ -644,13 +611,12 @@ function DNSConfiguration() {
         }
         zonesDataRef.current = newZones;
         
-        console.log('✅ UPDATED ZONES STATE:');
+        console.log('UPDATED ZONES STATE:');
         console.log('Primary forward:', newZones.primary.forward.map(z => z.name));
         console.log('Primary reverse:', newZones.primary.reverse.map(z => z.name));
         console.log('Secondary forward:', newZones.secondary.forward.map(z => z.name));
         console.log('Secondary reverse:', newZones.secondary.reverse.map(z => z.name));
         
-        // Check if newly created zones are now in the response
         checkNewlyCreatedZonesAgainstResponse(newZones, updates);
         
         return newZones;
@@ -664,22 +630,18 @@ function DNSConfiguration() {
       hasFetchedInitialDetails.current = true;
       actionInProgressRef.current = false;
       
-      // FIXED: Improved record refresh logic
       if (selectedZone.zone && selectedZone.machine) {
-        console.log(`🔄 Auto-refreshing records for selected zone: ${selectedZone.zone} (${selectedZone.machine})`);
-        // Use a small delay to ensure state is updated
+        console.log(`Auto-refreshing records for selected zone: ${selectedZone.zone} (${selectedZone.machine})`);
         setTimeout(() => {
           fetchZoneRecords(selectedZone.zone, selectedZone.machine, selectedZone.zoneType, true);
         }, 300);
       }
       
-      // Check if newly created records are now in the response
       checkNewlyCreatedRecordsAgainstResponse(updates);
       
       return;
     }
     
-    // Handle single machine response (fallback)
     if (machineType || responseData.dns_details) {
       const targetMachineType = machineType || 'primary';
       const details = responseData.dns_details || responseData;
@@ -700,9 +662,8 @@ function DNSConfiguration() {
           [targetMachineType]: processedZones
         };
         zonesDataRef.current = newZones;
-        console.log(`✅ Updated ${targetMachineType} zones:`, newZones[targetMachineType]);
+        console.log(`Updated ${targetMachineType} zones:`, newZones[targetMachineType]);
         
-        // Check for newly created zones
         if (newlyCreatedZones.length > 0) {
           const remainingZones = newlyCreatedZones.filter(
             zone => !(zone.machineType === targetMachineType && 
@@ -724,26 +685,23 @@ function DNSConfiguration() {
       hasFetchedInitialDetails.current = true;
       actionInProgressRef.current = false;
       
-      // Refresh records if this machine's zone is selected
       if (selectedZone.zone && selectedZone.machine === targetMachineType) {
-        console.log(`🔄 Auto-refreshing records for selected zone: ${selectedZone.zone}`);
+        console.log(`Auto-refreshing records for selected zone: ${selectedZone.zone}`);
         setTimeout(() => {
           fetchZoneRecords(selectedZone.zone, targetMachineType, selectedZone.zoneType, true);
         }, 300);
       }
       
-      // Check for newly created records for this machine
       checkNewlyCreatedRecordsAgainstResponse({
         [targetMachineType]: { details: details, zones: processedZones }
       });
     }
   }, [selectedZone, processZonesFromDetails, newlyCreatedZones, fetchZoneRecords]);
 
-  // Function to check newly created zones against the response
   const checkNewlyCreatedZonesAgainstResponse = useCallback((newZones, updates) => {
     if (newlyCreatedZones.length === 0) return;
     
-    console.log('🔍 Checking newly created zones against response...');
+    console.log('Checking newly created zones against response...');
     
     const remainingZones = [];
     
@@ -753,40 +711,35 @@ function DNSConfiguration() {
       let found = false;
       
       if (machineType === 'primary' && updates.primary) {
-        // Check in primary forward zones
         found = updates.primary.zones.forward.some(z => normalizeZoneName(z.name) === normalizedZoneName);
-        // Check in primary reverse zones
         if (!found) {
           found = updates.primary.zones.reverse.some(z => normalizeZoneName(z.name) === normalizedZoneName);
         }
       } else if (machineType === 'secondary' && updates.secondary) {
-        // Check in secondary forward zones
         found = updates.secondary.zones.forward.some(z => normalizeZoneName(z.name) === normalizedZoneName);
-        // Check in secondary reverse zones
         if (!found) {
           found = updates.secondary.zones.reverse.some(z => normalizeZoneName(z.name) === normalizedZoneName);
         }
       }
       
       if (found) {
-        console.log(`✅ New zone "${name}" found in response! Removing from pending list.`);
+        console.log(`New zone "${name}" found in response! Removing from pending list.`);
       } else {
-        console.log(`❌ New zone "${name}" NOT found in response, keeping in pending list.`);
+        console.log(`New zone "${name}" NOT found in response, keeping in pending list.`);
         remainingZones.push(newZone);
       }
     });
     
     if (remainingZones.length !== newlyCreatedZones.length) {
       setNewlyCreatedZones(remainingZones);
-      console.log(`📊 Updated newlyCreatedZones: ${remainingZones.length} zones pending`);
+      console.log(`Updated newlyCreatedZones: ${remainingZones.length} zones pending`);
     }
   }, [newlyCreatedZones]);
 
-  // FIXED: Enhanced function to check newly created records against the response
   const checkNewlyCreatedRecordsAgainstResponse = useCallback((updates) => {
     if (newlyCreatedRecords.length === 0) return;
     
-    console.log('🔍 Checking newly created records against response...');
+    console.log('Checking newly created records against response...');
     
     const remainingRecords = [];
     
@@ -796,13 +749,11 @@ function DNSConfiguration() {
       const normalizedRecordName = normalizeZoneName(name);
       let found = false;
       
-      // Check in the appropriate machine's details
       const targetMachine = machine === 'primary' ? updates.primary : updates.secondary;
       
       if (targetMachine && targetMachine.details) {
         const details = targetMachine.details;
         
-        // Check forward zones
         if (details.forward_zones) {
           Object.entries(details.forward_zones).forEach(([zoneKey, zoneData]) => {
             const currentZoneName = zoneData.name || zoneData.zone_name || zoneKey;
@@ -812,17 +763,15 @@ function DNSConfiguration() {
               if (zoneData.records && zoneData.records[type]) {
                 const recordTypeObj = zoneData.records[type];
                 if (recordTypeObj && typeof recordTypeObj === 'object') {
-                  // Check if record exists by name
                   found = Object.keys(recordTypeObj).some(recordKey => 
                     normalizeZoneName(recordKey) === normalizedRecordName
                   );
                   
-                  // Also check if the data matches
                   if (found && recordTypeObj[name]) {
                     const recordData = recordTypeObj[name];
                     const recordValue = recordData.value || recordData.data || '';
                     if (recordValue !== newRecord.data) {
-                      console.log(`⚠️ Record "${name}" found but data doesn't match: ${recordValue} vs ${newRecord.data}`);
+                      console.log(`Record "${name}" found but data doesn't match: ${recordValue} vs ${newRecord.data}`);
                     }
                   }
                 }
@@ -831,7 +780,6 @@ function DNSConfiguration() {
           });
         }
         
-        // Check reverse zones
         if (!found && details.reverse_zones) {
           Object.entries(details.reverse_zones).forEach(([zoneKey, zoneData]) => {
             const currentZoneName = zoneData.name || zoneData.zone_name || zoneKey;
@@ -852,21 +800,21 @@ function DNSConfiguration() {
       }
       
       if (found) {
-        console.log(`✅ New record "${name}" (${type}) found in response!`);
+        console.log(`New record "${name}" (${type}) found in response!`);
       } else {
-        console.log(`❌ New record "${name}" (${type}) NOT found in response, keeping in pending list.`);
+        console.log(`New record "${name}" (${type}) NOT found in response, keeping in pending list.`);
         remainingRecords.push(newRecord);
       }
     });
     
     if (remainingRecords.length !== newlyCreatedRecords.length) {
       setNewlyCreatedRecords(remainingRecords);
-      console.log(`📊 Updated newlyCreatedRecords: ${remainingRecords.length} records pending`);
+      console.log(`Updated newlyCreatedRecords: ${remainingRecords.length} records pending`);
     }
   }, [newlyCreatedRecords]);
 
   const handleWebSocketMessage = useCallback((message) => {
-    console.log('📨 DNS received WebSocket message:', message);
+    console.log('DNS received WebSocket message:', message);
     
     let command, result, error, payload;
     
@@ -892,19 +840,19 @@ function DNSConfiguration() {
       error = message.error;
       payload = message.payload;
     } else if (message.message) {
-      console.log('📝 Backend log:', message.message);
+      console.log('Backend log:', message.message);
       return;
     }
     
     if (!command) {
-      console.log('⚠️ No command found in message:', message);
+      console.log('No command found in message:', message);
       return;
     }
     
-    console.log(`🔄 Processing response for command: ${command}`, { result, error, payload });
+    console.log(`Processing response for command: ${command}`, { result, error, payload });
     
     if (error) {
-      console.log(`❌ Error from backend for command ${command}:`, error);
+      console.log(`Error from backend for command ${command}:`, error);
       setError(`Error: ${error}`);
       setLoading(false);
       setCheckingStatus(false);
@@ -914,27 +862,27 @@ function DNSConfiguration() {
     }
     
     const responseData = extractResult(result);
-    console.log('📊 Extracted response data:', responseData);
+    console.log('Extracted response data:', responseData);
     
     switch(command) {
       case 'get_machine_info':
-        console.log('✅ Received machine info');
+        console.log('Received machine info');
         if (responseData && responseData.machines) {
           processDnsMachines(responseData.machines);
         }
         break;
         
       case 'check_dns_role_installed_windows_ansible':
-        console.log('✅ Received DNS check response');
+        console.log('Received DNS check response');
         handleDNSCheckResponse(responseData);
         break;
         
       case 'get_dns_details_windows_ansible':
-        console.log('✅ Received DNS details response');
+        console.log('Received DNS details response');
         if (responseData) {
           processDNSDetails(responseData);
         } else {
-          console.error('❌ Empty response for DNS details');
+          console.error('Empty response for DNS details');
           setError('Received empty response from server');
           setZonesLoading({ primary: false, secondary: false });
           setRefreshing(false);
@@ -943,30 +891,30 @@ function DNSConfiguration() {
         break;
         
       case 'install_dns_role_windows_ansible':
-        console.log('✅ Received DNS installation response');
+        console.log('Received DNS installation response');
         handleDNSInstallResponse(responseData);
         break;
         
       case 'create_zone_forward_lookup_zone_dns_windows_ansible':
       case 'create_zone_reverse_lookup_zone_dns_windows_ansible':
-        console.log('✅ Received zone creation response');
+        console.log('Received zone creation response');
         handleZoneCreationResponse(responseData);
         break;
         
       case 'create_host_record_forward_lookup_zone_dns_windows_ansible':
       case 'create_pointer_record_reverse_lookup_zone_dns_windows_ansible':
-        console.log('✅ Received record creation response');
+        console.log('Received record creation response');
         handleRecordCreationResponse(responseData);
         break;
         
       case 'delete_forward_zone_dns_windows_ansible':
       case 'delete_reverse_zone_dns_windows_ansible':
-        console.log('✅ Received zone deletion response');
+        console.log('Received zone deletion response');
         handleZoneDeletionResponse(responseData);
         break;
         
       default:
-        console.log(`⚠️ Unhandled command: ${command}`);
+        console.log(`Unhandled command: ${command}`);
     }
   }, [processDNSDetails, processDnsMachines]);
 
@@ -1000,7 +948,6 @@ function DNSConfiguration() {
         updateInstallationStatus('dns', INSTALLATION_STATUS.INSTALLED, 100, 'DNS server is installed');
         setShowInstallModal(false);
         
-        // Auto-fetch DNS details after confirming installation
         setTimeout(() => {
           fetchDNSDetails();
         }, 1000);
@@ -1060,7 +1007,6 @@ function DNSConfiguration() {
         setInstallSuccess(false);
         setInstallProgress('');
         
-        // Auto-fetch DNS details after installation
         setTimeout(() => {
           fetchDNSDetails();
         }, 500);
@@ -1073,7 +1019,6 @@ function DNSConfiguration() {
     }
   };
 
-  // FIXED: Enhanced zone creation response handler
   const handleZoneCreationResponse = useCallback((responseData) => {
     setActionLoading(false);
     
@@ -1083,7 +1028,6 @@ function DNSConfiguration() {
     if (typeof responseData === 'string') {
       zoneCreationSuccess = responseData.toLowerCase().includes('created') || 
                            responseData.toLowerCase().includes('success');
-      // Extract zone name from response
       const match = responseData.match(/Zone\s+['"](.+?)['"]\s+created/) || 
                    responseData.match(/zone\s+['"](.+?)['"]\s+created/i) ||
                    responseData.match(/['"](.+?)['"]\s+created/i);
@@ -1101,7 +1045,6 @@ function DNSConfiguration() {
       setSuccessMessage(`Zone "${normalizedZoneName}" created successfully!`);
       setShowCreateZoneModal(false);
       
-      // Add to newly created zones list
       const newZoneEntry = {
         name: normalizedZoneName,
         machineType: newZoneData.targetMachine,
@@ -1110,7 +1053,6 @@ function DNSConfiguration() {
       };
       setNewlyCreatedZones(prev => [...prev, newZoneEntry]);
       
-      // Reset form
       setNewZoneData({ 
         zoneName: '', 
         zoneType: 'forward', 
@@ -1118,13 +1060,11 @@ function DNSConfiguration() {
         targetMachine: 'primary'
       });
       
-      // Force refresh after delay to ensure backend is ready
-      console.log(`🔄 Zone created successfully, refreshing DNS data in 3 seconds...`);
+      console.log(`Zone created successfully, refreshing DNS data in 3 seconds...`);
       setTimeout(() => {
         refreshDNSData();
       }, 3000);
       
-      // Clear success message after 5 seconds
       setTimeout(() => {
         setSuccessMessage(null);
       }, 5000);
@@ -1135,7 +1075,6 @@ function DNSConfiguration() {
     }
   }, [newZoneData]);
 
-  // FIXED: Enhanced record creation response handler with immediate UI update
   const handleRecordCreationResponse = useCallback((responseData) => {
     setActionLoading(false);
     
@@ -1165,7 +1104,6 @@ function DNSConfiguration() {
       setSuccessMessage(successMsg);
       setShowCreateRecordModal(false);
       
-      // Add to newly created records list
       const newRecordEntry = {
         name: recordName,
         type: recordType,
@@ -1176,23 +1114,19 @@ function DNSConfiguration() {
         timestamp: Date.now()
       };
       
-      console.log('📝 Adding new record to pending list:', newRecordEntry);
+      console.log('Adding new record to pending list:', newRecordEntry);
       setNewlyCreatedRecords(prev => [...prev, newRecordEntry]);
       
-      // Immediately update the UI with the new record
       if (selectedZone.zone && (selectedZone.machine || newRecordData.targetMachine)) {
         const machineType = selectedZone.machine || newRecordData.targetMachine;
         const newRecordId = `new-${machineType}-${normalizeZoneName(selectedZone.zone)}-${recordName}-${recordType}`;
         
-        // Track this ID
         recentlyCreatedRecordIds.current.add(newRecordId);
         
-        // Clean up after 30 seconds
         setTimeout(() => {
           recentlyCreatedRecordIds.current.delete(newRecordId);
         }, 30000);
         
-        // Immediately add the record to the current view
         const newRecord = {
           id: newRecordId,
           name: recordName,
@@ -1205,9 +1139,8 @@ function DNSConfiguration() {
           isNewlyCreated: true
         };
         
-        console.log('📝 Immediately adding record to UI:', newRecord);
+        console.log('Immediately adding record to UI:', newRecord);
         setRecords(prev => {
-          // Check if record already exists
           const exists = prev.some(r => 
             r.name === newRecord.name && 
             r.type === newRecord.type && 
@@ -1222,7 +1155,6 @@ function DNSConfiguration() {
         });
       }
       
-      // Reset form
       setNewRecordData({
         recordType: 'A',
         recordName: '',
@@ -1232,13 +1164,11 @@ function DNSConfiguration() {
         targetMachine: selectedZone.machine || 'primary'
       });
       
-      // Force refresh DNS data to get the latest from backend
-      console.log(`🔄 Record created successfully, refreshing DNS data in 2 seconds...`);
+      console.log(`Record created successfully, refreshing DNS data in 2 seconds...`);
       setTimeout(() => {
         refreshDNSData();
       }, 2000);
       
-      // Clear success message after 5 seconds
       setTimeout(() => {
         setSuccessMessage(null);
       }, 5000);
@@ -1266,12 +1196,10 @@ function DNSConfiguration() {
       setSelectedZone({ machine: null, zone: null, zoneType: null });
       setRecords([]);
       
-      // Force refresh
       setTimeout(() => {
         refreshDNSData();
       }, 500);
       
-      // Clear success message after 3 seconds
       setTimeout(() => {
         setSuccessMessage(null);
       }, 3000);
@@ -1304,13 +1232,13 @@ function DNSConfiguration() {
       return;
     }
     
-    console.log('📤 SENDING COMMAND: get_dns_details_windows_ansible (initial)');
+    console.log('SENDING COMMAND: get_dns_details_windows_ansible (initial)');
     sendCommand('get_dns_details_windows_ansible', payload);
   };
 
   const installDNSRole = () => {
     if (installations.dns?.status === INSTALLATION_STATUS.INSTALLING) {
-      console.log('⏳ Installation already in progress');
+      console.log('Installation already in progress');
       return;
     }
 
@@ -1328,7 +1256,7 @@ function DNSConfiguration() {
       return;
     }
     
-    console.log('📤 SENDING COMMAND: install_dns_role_windows_ansible');
+    console.log('SENDING COMMAND: install_dns_role_windows_ansible');
     
     setInstalling(true);
     setInstallSuccess(false);
@@ -1367,7 +1295,7 @@ function DNSConfiguration() {
       additionalData = { zone_name: `${ipParts.slice(0, 3).join('.')}.in-addr.arpa` };
     }
     
-    console.log(`📤 SENDING COMMAND: ${command} for ${newZoneData.targetMachine}`);
+    console.log(`SENDING COMMAND: ${command} for ${newZoneData.targetMachine}`);
     
     const payload = createPayload(additionalData, newZoneData.targetMachine);
     if (!payload) {
@@ -1446,7 +1374,7 @@ function DNSConfiguration() {
       return;
     }
     
-    console.log(`📤 SENDING COMMAND: ${command} for ${newRecordData.targetMachine}`);
+    console.log(`SENDING COMMAND: ${command} for ${newRecordData.targetMachine}`);
     
     const payload = createPayload(additionalData, newRecordData.targetMachine);
     if (!payload) {
@@ -1464,7 +1392,7 @@ function DNSConfiguration() {
       return;
     }
 
-    console.log(`🗑️ Deleting DNS zone: ${zoneName} from ${machineType}`);
+    console.log(`Deleting DNS zone: ${zoneName} from ${machineType}`);
     setError(null);
     
     const command = zoneType === 'Reverse' ? 
@@ -1479,7 +1407,7 @@ function DNSConfiguration() {
       return;
     }
     
-    console.log(`📤 SENDING COMMAND: ${command}`);
+    console.log(`SENDING COMMAND: ${command}`);
     sendCommand(command, payload);
   };
 
@@ -1512,7 +1440,6 @@ function DNSConfiguration() {
       allZones.push(...currentZones.secondary.reverse.map(z => ({ ...z, machineType: 'secondary', machineName: secondaryMachine.name })));
     }
     
-    // Add newly created zones that haven't been confirmed yet
     newlyCreatedZones.forEach(newZone => {
       const normalizedNewZoneName = normalizeZoneName(newZone.name);
       const alreadyExists = allZones.some(z => normalizeZoneName(z.name) === normalizedNewZoneName && z.machineType === newZone.machineType);
@@ -1541,10 +1468,9 @@ function DNSConfiguration() {
       (zoneType === 'reverse' && zone.name.includes('in-addr.arpa'))
     );
     
-    // Sort zones alphabetically
     const sortedZones = [...filteredZones].sort((a, b) => a.name.localeCompare(b.name));
     
-    console.log(`📊 RENDERING ${zoneType} zones:`, sortedZones.length, 'zones');
+    console.log(`RENDERING ${zoneType} zones:`, sortedZones.length, 'zones');
     
     return (
       <div className="zone-list-container">
@@ -1575,7 +1501,7 @@ function DNSConfiguration() {
             <button 
               className="btn-refresh-zones"
               onClick={() => {
-                console.log('🔄 Manual refresh triggered');
+                console.log('Manual refresh triggered');
                 refreshDNSData();
               }}
               disabled={zonesLoading.primary || zonesLoading.secondary || actionLoading || refreshing || actionInProgressRef.current}
@@ -1958,7 +1884,7 @@ function DNSConfiguration() {
 
   useEffect(() => {
     if (!listenerAdded.current) {
-      console.log('🚀 DNS Component Mounted - Setting up WebSocket listener');
+      console.log(' DNS Component Mounted - Setting up WebSocket listener');
       const removeListener = addListener(handleWebSocketMessage);
       listenerAdded.current = true;
       
@@ -1981,13 +1907,13 @@ function DNSConfiguration() {
     }
     
     const performInitialCheck = () => {
-      console.log('🔍 Performing initial DNS check...');
+      console.log('Performing initial DNS check...');
       
       setCheckingStatus(true);
       setLoading(true);
       
       if (installations.dns?.status === INSTALLATION_STATUS.INSTALLING) {
-        console.log('⏳ DNS is installing globally');
+        console.log('DNS is installing globally');
         setCheckingStatus(false);
         setLoading(false);
         initialCheckDone.current = true;
@@ -1995,11 +1921,11 @@ function DNSConfiguration() {
       }
       
       if (isConnected) {
-        console.log('✅ WebSocket connected, fetching machine info...');
+        console.log('WebSocket connected, fetching machine info...');
         getDnsMachinesFromDatabase();
         initialCheckDone.current = true;
       } else {
-        console.log('⚠️ WebSocket not connected, retrying...');
+        console.log('WebSocket not connected, retrying...');
         setTimeout(performInitialCheck, 1000);
       }
     };
@@ -2010,7 +1936,7 @@ function DNSConfiguration() {
 
   useEffect(() => {
     if (dnsMachines.length > 0) {
-      console.log('🔍 DNS machines loaded, checking DNS status...');
+      console.log('DNS machines loaded, checking DNS status...');
       checkDNSOnMachines();
     }
   }, [dnsMachines]);
@@ -2031,7 +1957,7 @@ function DNSConfiguration() {
       return;
     }
     
-    console.log('📤 SENDING COMMAND: check_dns_role_installed_windows_ansible');
+    console.log('SENDING COMMAND: check_dns_role_installed_windows_ansible');
     sendCommand('check_dns_role_installed_windows_ansible', payload);
   };
 
@@ -2206,7 +2132,6 @@ function DNSConfiguration() {
         )}
       </div>
 
-      {/* Install Modal */}
       {showInstallModal && (
         <div className="modal-overlay">
           <div className="modal">
@@ -2297,7 +2222,6 @@ function DNSConfiguration() {
         </div>
       )}
 
-      {/* Create Zone Modal */}
       {showCreateZoneModal && (
         <div className="modal-overlay">
           <div className="modal">
@@ -2413,7 +2337,6 @@ function DNSConfiguration() {
         </div>
       )}
 
-      {/* Create Record Modal */}
       {showCreateRecordModal && selectedZone.machine && (
         <div className="modal-overlay">
           <div className="modal">
