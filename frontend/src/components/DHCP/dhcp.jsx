@@ -198,12 +198,12 @@ const DHCP = () => {
   };
 
   const getDhcpMachinesFromDatabase = () => {
-    console.log('📡 Fetching DHCP machines from database...');
+    console.log('Fetching DHCP machines from database...');
     sendCommand('get_machine_info', {});
   };
 
   const processDhcpMachines = (machines) => {
-    console.log('🖥️ Processing DHCP machines:', machines);
+    console.log('Processing DHCP machines:', machines);
     
     if (!machines || !Array.isArray(machines)) {
       console.error(' Invalid machines data received:', machines);

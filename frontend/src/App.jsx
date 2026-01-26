@@ -14,6 +14,7 @@ import Routing from "./components/Routing/Routing";
 import DHCP from "./components/DHCP/DHCP";
 import ActiveDirectory from "./components/ActiveDirectory/ActiveDirectory";
 import MachineManagement from "./components/MachineManagement/MachineManagement";
+import Switch from "./components/Switch/Switch";
 import ESXI from "./components/ESXI/ESXi";
 
 const ProtectedRoute = ({ children }) => {
@@ -88,10 +89,10 @@ function App() {
               </SidebarLayout>
             </ProtectedRoute>
           } />
-          <Route path="/networking" element={
+          <Route path="/switch" element={
             <ProtectedRoute>
               <SidebarLayout>
-                <div> Networking Page - Coming Soon</div>
+                <Switch />
               </SidebarLayout>
             </ProtectedRoute>
           } />

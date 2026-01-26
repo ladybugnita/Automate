@@ -26,7 +26,7 @@ const Users = () => {
 
   const navItems = [
     'Dashboard', 'DNS Configuration','Event Viewer', 'DHCP', 'Users',
-    'Resource Monitor', 'WDS', 'Networking', 'Machine Management',
+    'Resource Monitor', 'Switch', 'Machine Management',
     'Active Directory', 'Routing'
   ];
 
