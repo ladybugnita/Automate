@@ -49,6 +49,7 @@ const EventViewer = () => {
     const [lastUpdated, setLastUpdated] = useState(null);
     const [markedMachines, setMarkedMachines] = useState([]);
     const [machinesLoading, setMachinesLoading] = useState(true);
+    const [showMarkModal, setShowMarkModal] = useState(false);
     const [error, setError] = useState(null);
     
     const isFetchingRef = useRef(false);
@@ -76,7 +77,7 @@ const EventViewer = () => {
     };
 
     const fetchMachineInfo = useCallback(() => {
-        console.log('Fetching ALL machines from database...');
+        console.log('Event Viewer: Fetching ALL machines from database...');
         setMachinesLoading(true);
         setError(null);
         
@@ -84,10 +85,10 @@ const EventViewer = () => {
     }, [sendCommand]);
 
     const processMachineInfo = useCallback((machines) => {
-        console.log('Processing ALL machines info:', machines);
+        console.log('Event Viewer: Processing ALL machines info:', machines);
         
         if (!machines || !Array.isArray(machines)) {
-            console.error('Invalid machine data received:', machines);
+            console.error('Event Viewer: Invalid machine data received:', machines);
             setError('Invalid machine data received from server');
             setMachinesLoading(false);
             return;
@@ -99,27 +100,29 @@ const EventViewer = () => {
                    machine.marked_as.length > 0;
         });
 
-        console.log(`Found ${markedMachinesList.length} marked machines:`, markedMachinesList);
+        console.log(`Event Viewer: Found ${markedMachinesList.length} marked machines:`, markedMachinesList);
         setMarkedMachines(markedMachinesList);
         
         setMachinesLoading(false);
         
-        if (markedMachinesList.length > 0 && isConnected) {
-            console.log('Auto-fetching events for all marked machines');
+        if (markedMachinesList.length > 0) {
+            console.log('Event Viewer: Automatically fetching events for all marked machines');
             fetchEventData(markedMachinesList);
+        } else {
+            setShowMarkModal(true);
         }
-    }, [isConnected]);
+    }, []);
 
     const getWindowsInfoForMachine = (machine) => {
         if (!machine) {
-            console.error('No machine provided to getWindowsInfoForMachine');
+            console.error('Event Viewer: No machine provided to getWindowsInfoForMachine');
             return null;
         }
         
-        console.log(`Getting Windows info for machine: ${machine.name} (${machine.ip})`);
+        console.log(`Event Viewer: Getting Windows info for machine: ${machine.name} (${machine.ip})`);
         
         if (!machine.password) {
-            console.error('No password found for machine:', machine.name);
+            console.error('Event Viewer: No password found for machine:', machine.name);
             setError(`No password found for machine: ${machine.name}`);
             return null;
         }
@@ -133,7 +136,7 @@ const EventViewer = () => {
 
     const createEventViewerPayload = (machines) => {
         if (!machines || machines.length === 0) {
-            console.error('No marked machines found');
+            console.error('Event Viewer: No marked machines found');
             setError('No marked machines found. Please mark machines as DNS, DHCP, or AD in Machine Management first.');
             return null;
         }
@@ -148,12 +151,12 @@ const EventViewer = () => {
         });
         
         if (windowsInfos.length === 0) {
-            console.error('Failed to get Windows info for any marked machine');
+            console.error('Event Viewer: Failed to get Windows info for any marked machine');
             setError('Failed to get credentials for marked machines');
             return null;
         }
         
-        console.log(`Creating payload for ${windowsInfos.length} machine(s)`);
+        console.log(`Event Viewer: Creating payload for ${windowsInfos.length} machine(s)`);
         
         return {
             windows_infos: windowsInfos,
@@ -197,10 +200,10 @@ const EventViewer = () => {
             return;
         }
         
-        console.log(`Processing response for command: ${command}`, { result, error });
+        console.log(`Event Viewer: Processing response for command: ${command}`, { result, error });
         
         if (error) {
-            console.log(`Error from backend for command ${command}:`, error);
+            console.log(`Event Viewer: Error from backend for command ${command}:`, error);
             setError(`Error: ${error}`);
             setLoading(false);
             setMachinesLoading(false);
@@ -209,11 +212,11 @@ const EventViewer = () => {
         }
         
         const responseData = extractResult(result);
-        console.log('Extracted response data:', responseData);
+        console.log('Event Viewer: Extracted response data:', responseData);
         
         switch(command) {
             case 'get_machine_info':
-                console.log('Received machine info');
+                console.log('Event Viewer: Received machine info');
                 if (responseData && responseData.machines) {
                     processMachineInfo(responseData.machines);
                 } else if (responseData && responseData.success === false) {
@@ -223,7 +226,7 @@ const EventViewer = () => {
                 break;
                 
             case 'get_event_viewer_data':
-                console.log('Processing event viewer data for all marked machines');
+                console.log('Event Viewer: Processing event viewer data for all marked machines');
                 isFetchingRef.current = false;
                 
                 let eventData = null;
@@ -237,7 +240,7 @@ const EventViewer = () => {
                 }
                 
                 if (eventData) {
-                    console.log('Loaded aggregated event viewer data:', eventData);
+                    console.log('Event Viewer: Loaded aggregated event viewer data:', eventData);
                     
                     if (Array.isArray(eventData)) {
                         const systemEvents = [];
@@ -292,7 +295,7 @@ const EventViewer = () => {
                     setLoading(false);
                     setLastUpdated(new Date());
                 } else {
-                    console.log('No event data found in response');
+                    console.log('Event Viewer: No event data found in response');
                     setEvents({
                         system: [],
                         application: [],
@@ -308,31 +311,31 @@ const EventViewer = () => {
                 break;
                 
             default:
-                console.log(`Unhandled command in Event Viewer: ${command}`);
+                console.log(`Event Viewer: Unhandled command: ${command}`);
         }
     }, [processMachineInfo]);
 
     const fetchEventData = useCallback((machines = markedMachines) => {
         if (isFetchingRef.current) {
-            console.log('Already fetching event data, skipping...');
+            console.log('Event Viewer: Already fetching event data, skipping...');
             return;
         }
 
         if (!isConnected) {
-            console.log('WebSocket not connected');
+            console.log('Event Viewer: WebSocket not connected');
             setError('Not connected to backend system');
             setLoading(false);
             return;
         }
 
         if (!machines || machines.length === 0) {
-            console.log('No marked machines found');
+            console.log('Event Viewer: No marked machines found');
             setError('No marked machines found. Please mark machines as DNS, DHCP, or AD in Machine Management first.');
             setLoading(false);
             return;
         }
 
-        console.log(`Fetching event viewer data for ${machines.length} marked machine(s)...`);
+        console.log(`Event Viewer: Fetching event viewer data for ${machines.length} marked machine(s)...`);
         setLoading(true);
         setError(null);
         isFetchingRef.current = true;
@@ -348,7 +351,7 @@ const EventViewer = () => {
 
         timeoutRef.current = setTimeout(() => {
             if (isFetchingRef.current) {
-                console.log('Timeout: No response from backend for event data');
+                console.log('Event Viewer: Timeout: No response from backend for event data');
                 setError('Timeout: No response from server');
                 setLoading(false);
                 isFetchingRef.current = false;
@@ -356,6 +359,34 @@ const EventViewer = () => {
             }
         }, 30000);
     }, [isConnected, markedMachines, sendCommand, selectedCategory]);
+
+    const getEventStats = () => {
+        return {
+            system: events.system.length,
+            application: events.application.length,
+            security: events.security.length,
+            total: events.system.length + events.application.length + events.security.length
+        };
+    };
+
+    const handleManualRefresh = useCallback(() => {
+        if (!isConnected) {
+            alert('Cannot refresh: Not connected to backend system');
+            return;
+        }
+        
+        if (markedMachines.length === 0) {
+            alert('No marked machines found. Please mark machines first.');
+            return;
+        }
+        
+        if (isFetchingRef.current) {
+            console.log('Already refreshing, please wait...');
+            return;
+        }
+        
+        fetchEventData();
+    }, [isConnected, markedMachines.length, fetchEventData, isFetchingRef]);
 
     useEffect(() => {
         if (autoRefresh && markedMachines.length > 0) {
@@ -388,39 +419,20 @@ const EventViewer = () => {
 
     useEffect(() => {
         if (isConnected && markedMachines.length === 0) {
-            console.log('Connected, fetching machine info...');
+            console.log('Event Viewer: Connected, fetching machine info...');
             fetchMachineInfo();
         }
     }, [isConnected, fetchMachineInfo, markedMachines.length]);
 
     useEffect(() => {
         if (markedMachines.length > 0 && isConnected) {
-            console.log('Category changed, fetching events for all marked machines...');
+            console.log('Event Viewer: Category changed, fetching events for all marked machines...');
             fetchEventData();
         }
     }, [selectedCategory, fetchEventData, isConnected]);
 
     const handleCategoryChange = (category) => {
         setSelectedCategory(category);
-    };
-
-    const handleManualRefresh = () => {
-        if (!isConnected) {
-            alert('Cannot refresh: Not connected to backend system');
-            return;
-        }
-        
-        if (markedMachines.length === 0) {
-            alert('No marked machines found. Please mark machines first.');
-            return;
-        }
-        
-        if (isFetchingRef.current) {
-            console.log('Already refreshing, please wait...');
-            return;
-        }
-        
-        fetchEventData();
     };
 
     const handleRefreshMachines = () => {
@@ -447,6 +459,80 @@ const EventViewer = () => {
     const getMachineRoles = (machine) => {
         if (!machine.marked_as || !Array.isArray(machine.marked_as)) return [];
         return machine.marked_as.map(mark => `${mark.role} ${mark.type}`).join(', ');
+    };
+
+    const formatLastRefresh = () => {
+        return lastUpdated ? lastUpdated.toLocaleTimeString() : 'Never';
+    };
+
+    const MarkMachineModal = () => {
+        if (!showMarkModal) return null;
+
+        const eventStats = getEventStats();
+
+        return (
+            <div className="modal-overlay">
+                <div className="modal-container">
+                    <div className="modal-content">
+                        <div className="modal-header">
+                            <h3 className="modal-title">No Marked Machines Found</h3>
+                        </div>
+                        <div className="modal-body">
+                            <div className="modal-message">
+                                <p>No machines are currently marked as DNS, DHCP, or AD roles.</p>
+                                <p>To view events, you need to mark at least one machine in Machine Management.</p>
+                            </div>
+                            
+                            <div className="modal-stats-grid">
+                                <div className="modal-stat-item">
+                                    <div className="modal-stat-label">SYSTEM EVENTS</div>
+                                    <div className="modal-stat-value">{eventStats.system}</div>
+                                </div>
+                                <div className="modal-stat-item">
+                                    <div className="modal-stat-label">APPLICATION EVENTS</div>
+                                    <div className="modal-stat-value">{eventStats.application}</div>
+                                </div>
+                                <div className="modal-stat-item">
+                                    <div className="modal-stat-label">SECURITY EVENTS</div>
+                                    <div className="modal-stat-value">{eventStats.security}</div>
+                                </div>
+                                <div className="modal-stat-item">
+                                    <div className="modal-stat-label">MARKED MACHINES</div>
+                                    <div className="modal-stat-value">{markedMachines.length}</div>
+                                </div>
+                            </div>
+                            
+                            <div className="modal-actions">
+                                <button 
+                                    className="modal-btn-primary"
+                                    onClick={() => {
+                                        setShowMarkModal(false);
+                                        window.location.href = '/machine-management';
+                                    }}
+                                >
+                                    Go to Machine Management
+                                </button>
+                                <button 
+                                    className="modal-btn-secondary"
+                                    onClick={() => {
+                                        setShowMarkModal(false);
+                                        handleRefreshMachines();
+                                    }}
+                                >
+                                    Refresh Machine List
+                                </button>
+                                <button 
+                                    className="modal-btn-tertiary"
+                                    onClick={() => setShowMarkModal(false)}
+                                >
+                                    Continue Anyway
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        );
     };
 
     return (
@@ -818,6 +904,21 @@ const EventViewer = () => {
                     </div>
                 </div>
             </div>
+
+            <MarkMachineModal />
+
+            {error && (
+                <div className="error-message-global">
+                    <div className="error-icon">⚠️</div>
+                    <div className="error-text">{error}</div>
+                    <button 
+                        className="btn-close-error" 
+                        onClick={() => setError(null)}
+                    >
+                        ×
+                    </button>
+                </div>
+            )}
         </div>
     );
 };
