@@ -141,6 +141,48 @@ const DHCP = () => {
     selectedScopeRef.current = selectedScope;
   }, [selectedScope]);
 
+  const getTotalScopesCount = () => {
+    return Object.keys(scopes).length;
+  };
+
+  const getTotalLeasesCount = () => {
+    let total = 0;
+    if (scopeDetails?.addressleases) {
+      total = Object.keys(scopeDetails.addressleases).length;
+    }
+    return total;
+  };
+
+  const getActiveLeasesCount = () => {
+    let active = 0;
+    if (scopeDetails?.addressleases) {
+      active = Object.values(scopeDetails.addressleases).filter(lease => lease.state === 'Active').length;
+    }
+    return active;
+  };
+
+  const formatTimeSinceLastRefresh = () => {
+    if (!lastRefreshTimeRef.current) return 'Never';
+    
+    const now = new Date();
+    const diffInSeconds = Math.floor((now - lastRefreshTimeRef.current) / 1000);
+    
+    if (diffInSeconds < 60) {
+      return `${diffInSeconds} seconds ago`;
+    } else if (diffInSeconds < 3600) {
+      const minutes = Math.floor(diffInSeconds / 60);
+      return `${minutes} minute${minutes !== 1 ? 's' : ''} ago`;
+    } else {
+      const hours = Math.floor(diffInSeconds / 3600);
+      return `${hours} hour${hours !== 1 ? 's' : ''} ago`;
+    }
+  };
+
+  const handleRefreshMachines = () => {
+    console.log('DHCP: Refreshing machine list');
+    getDhcpMachinesFromDatabase();
+  };
+
   const extractResult = (responseData) => {
     if (!responseData) return null;
     
@@ -579,23 +621,6 @@ const DHCP = () => {
     }
   };
 
-  const formatTimeSinceLastRefresh = () => {
-    if (!lastRefreshTimeRef.current) return 'Never';
-    
-    const now = new Date();
-    const diffInSeconds = Math.floor((now - lastRefreshTimeRef.current) / 1000);
-    
-    if (diffInSeconds < 60) {
-      return `${diffInSeconds} seconds ago`;
-    } else if (diffInSeconds < 3600) {
-      const minutes = Math.floor(diffInSeconds / 60);
-      return `${minutes} minute${minutes !== 1 ? 's' : ''} ago`;
-    } else {
-      const hours = Math.floor(diffInSeconds / 3600);
-      return `${hours} hour${hours !== 1 ? 's' : ''} ago`;
-    }
-  };
-
   const loadScopes = () => {
     if (!dhcpInstalled) {
       console.log('DHCP not installed, skipping loadScopes');
@@ -921,44 +946,71 @@ const DHCP = () => {
     modalClosedRef.current = true;
   };
 
-  const renderNoDHCPConfiguredModal = () => {
+  const NoDhcpModal = () => {
     if (!showNoDhcpModal) return null;
 
     return (
-      <div className="dhcp-install-modal-overlay">
-        <div className="dhcp-install-modal">
-          <div className="modal-header">
-            <h2><div style={{ color: 'red', fontSize: '17px' }}>DHCP Server Configuration Required!</div></h2>
-            <button 
-              className="btn-close-modal"
-              onClick={handleCloseNoDhcpModal}
-            >
-              ×
-            </button>
-          </div>
+      <div className="modal-overlay">
+        <div className="modal-container">
           <div className="modal-content">
-            <div className="warning-icon">
-              <i className="fas fa-exclamation-triangle fa-3x" style={{ color: '#ff9800' }}></i>
+            <div className="modal-header">
+              <h3 className="modal-title">No DHCP Machines Found</h3>
             </div>
-            <h3>No DHCP Machine Configured</h3>
-            <p>Please mark a machine as DHCP in Machine Management first.</p>
-            
-            <div className="warning-note">
-              <i className="fas fa-info-circle"></i>
-              <div>
-                <p className="note-title">Steps to configure:</p>
-                <ol>
-                  <li>Go to <strong>Machine Management</strong></li>
-                  <li>Select a machine and mark it with <strong>DHCP role</strong></li>
-                  <li>Return to this page</li>
-                  <li>The DHCP configuration will be available automatically</li>
-                </ol>
+            <div className="modal-body">
+              <div className="modal-message">
+                <p>No machines are currently marked as DHCP role.</p>
+                <p>To manage DHCP configuration, you need to mark at least one machine in Machine Management.</p>
               </div>
-            </div>
-            
-            <div className="connection-status-small">
-              <span className={`status-indicator ${isConnected ? 'connected' : 'disconnected'}`}></span>
-              WebSocket: {isConnected ? 'Connected' : 'Disconnected'}
+              
+              <div className="modal-stats-grid">
+                <div className="modal-stat-item">
+                  <div className="modal-stat-label">TOTAL SCOPES</div>
+                  <div className="modal-stat-value">{getTotalScopesCount()}</div>
+                </div>
+                <div className="modal-stat-item">
+                  <div className="modal-stat-label">TOTAL LEASES</div>
+                  <div className="modal-stat-value">{getTotalLeasesCount()}</div>
+                </div>
+                <div className="modal-stat-item">
+                  <div className="modal-stat-label">ACTIVE LEASES</div>
+                  <div className="modal-stat-value">{getActiveLeasesCount()}</div>
+                </div>
+                <div className="modal-stat-item">
+                  <button 
+                    className="modal-refresh-btn"
+                    onClick={handleRefreshMachines}
+                  >
+                    Refresh Machines
+                  </button>
+                </div>
+              </div>
+              
+              <div className="modal-actions">
+                <button 
+                  className="modal-btn-primary"
+                  onClick={() => {
+                    setShowNoDhcpModal(false);
+                    window.location.href = '/machine-management';
+                  }}
+                >
+                  Go to Machine Management
+                </button>
+                <button 
+                  className="modal-btn-secondary"
+                  onClick={() => {
+                    setShowNoDhcpModal(false);
+                    handleRefreshMachines();
+                  }}
+                >
+                  Refresh Machine List
+                </button>
+                <button 
+                  className="modal-btn-tertiary"
+                  onClick={() => setShowNoDhcpModal(false)}
+                >
+                  Continue Anyway
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -1099,7 +1151,7 @@ const DHCP = () => {
   }
 
   if (noDhcpConfigured && showNoDhcpModal) {
-    return renderNoDHCPConfiguredModal();
+    return <NoDhcpModal />;
   }
 
   if (showInstallModal && !dhcpInstalled) {
@@ -1134,7 +1186,7 @@ const DHCP = () => {
 
   return (
     <div className="dhcp-container">
-      {renderNoDHCPConfiguredModal()}
+      <NoDhcpModal />
       {renderInstallModal()}
       
       {error && (
