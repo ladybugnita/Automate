@@ -1,10 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useWebSocket } from '../../context/WebSocketContext';
-import { Eye, EyeOff } from 'lucide-react';
+import { Eye, EyeOff, Server, AlertCircle } from 'lucide-react';
 import './Routing.css';
 
 const Routing = () => {
-  const { sendCommand, addListener } = useWebSocket();
+  const { sendCommand, addListener, isConnected } = useWebSocket();
   
   const navButtons = [
     'Dashboard', 'DNS Configuration', 'Event Viewer', 'DHCP', 'Users',
@@ -14,6 +14,11 @@ const Routing = () => {
   
   const [activeTab, setActiveTab] = useState('rip');
   
+  const [markedMachines, setMarkedMachines] = useState([]);
+  const [machinesLoading, setMachinesLoading] = useState(true);
+  const [showMarkModal, setShowMarkModal] = useState(false);
+  const [showMachineInfo, setShowMachineInfo] = useState(false);
+  
   const [connectionData, setConnectionData] = useState({
     routerIp: '',
     sshUsername: '',
@@ -21,7 +26,6 @@ const Routing = () => {
   });
   
   const [ripNetworks, setRipNetworks] = useState(['']);
-  
   const [ospfData, setOspfData] = useState({
     processId: '',
     network: '',
@@ -35,7 +39,6 @@ const Routing = () => {
   });
   
   const [showPassword, setShowPassword] = useState(false);
-  
   const [validationErrors, setValidationErrors] = useState({
     routerIp: '',
     sshUsername: '',
@@ -51,6 +54,12 @@ const Routing = () => {
   
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [globalError, setGlobalError] = useState(null);
+  const [infoMessage, setInfoMessage] = useState('');
+  const [lastRefresh, setLastRefresh] = useState(null);
+  
+  const isFetchingRef = useRef(false);
+  const machineInfoListenerRef = useRef(false);
   
   const isValidIPAddress = (ip) => {
     const ipRegex = /^(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/;
@@ -59,37 +68,24 @@ const Routing = () => {
   
   const isValidNetwork = (network) => {
     const cidrRegex = /^(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\/([0-9]|[1-2][0-9]|3[0-2])$/;
-    
     const ipRegex = /^(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/;
-    
     return cidrRegex.test(network) || ipRegex.test(network);
   };
   
   const isValidSubnetMask = (mask) => {
-    const validMasks = [
-      '255.0.0.0', '255.128.0.0', '255.192.0.0', '255.224.0.0', '255.240.0.0',
-      '255.248.0.0', '255.252.0.0', '255.254.0.0', '255.255.0.0', '255.255.128.0',
-      '255.255.192.0', '255.255.224.0', '255.255.240.0', '255.255.248.0',
-      '255.255.252.0', '255.255.254.0', '255.255.255.0', '255.255.255.128',
-      '255.255.255.192', '255.255.255.224', '255.255.255.240', '255.255.255.248',
-      '255.255.255.252', '255.255.255.254', '255.255.255.255'
-    ];
-    
     if (isValidIPAddress(mask)) {
       const parts = mask.split('.');
       const binary = parts.map(part => parseInt(part).toString(2).padStart(8, '0')).join('');
-      
       let foundZero = false;
       for (let i = 0; i < binary.length; i++) {
         if (binary[i] === '0') {
           foundZero = true;
         } else if (foundZero && binary[i] === '1') {
-          return false; 
+          return false;
         }
       }
       return true;
     }
-    
     return false;
   };
   
@@ -102,41 +98,204 @@ const Routing = () => {
       const num = parseInt(area);
       return num >= 0 && num <= 4294967295;
     }
-    
     const ipRegex = /^(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/;
     return ipRegex.test(area);
   };
 
-  const validateConnectionData = () => {
-    const newErrors = {...validationErrors };
-    let hasError = false;
-
-    if(!connectionData.routerIp) {
-      newErrors.routerIp = 'Router IP is required';
-      hasError = true;
-    } else if (!isValidIPAddress(connectionData.routerIp)){
-      newErrors.routerIp = 'Invalid IP address format. Use format: 192.168.1.1';
-      hasError = true;
-    } else {
-      newErrors.routerIp = '';
+  const extractResult = (responseData) => {
+    if (!responseData) return null;
+    if (typeof responseData === 'string') {
+      try {
+        return JSON.parse(responseData);
+      } catch (e) {
+        return responseData;
+      }
     }
-
-    if(!connectionData.sshUsername){
-      newErrors.sshUsername = 'SSH Username is required';
-      hasError = true;
-    } else {
-      newErrors.sshUsername = '';
-    }
-
-    if(!connectionData.sshPassword){
-      newErrors.sshPassword = 'SSH Password is required';
-      hasError = true;
-    } else {
-      newErrors.sshPassword ='';
-    }
-    setValidationErrors(newErrors);
-    return !hasError;
+    return responseData;
   };
+
+  const fetchMachineInfo = useCallback(() => {
+    console.log('Routing: Fetching ALL machines from database...');
+    setMachinesLoading(true);
+    setGlobalError(null);
+    setInfoMessage('');
+    
+    sendCommand('get_machine_info', {});
+  }, [sendCommand]);
+
+  const processMachineInfo = useCallback((machines) => {
+    console.log('Routing: Processing ALL machines info:', machines);
+    
+    if (!machines || !Array.isArray(machines)) {
+      console.error('Routing: Invalid machine data received:', machines);
+      setGlobalError('Invalid machine data received from server');
+      setMachinesLoading(false);
+      return;
+    }
+
+    const markedMachinesList = machines.filter(machine => {
+      return machine.marked_as && 
+             Array.isArray(machine.marked_as) && 
+             machine.marked_as.length > 0;
+    });
+
+    console.log(`Routing: Found ${markedMachinesList.length} marked machines:`, markedMachinesList);
+    setMarkedMachines(markedMachinesList);
+    setMachinesLoading(false);
+    
+    if (markedMachinesList.length > 0) {
+      const routerMachines = markedMachinesList.filter(m => 
+        m.marked_as.some(mark => mark.role === 'router')
+      );
+      setInfoMessage(`Found ${markedMachinesList.length} marked machine(s). ${routerMachines.length} marked as router(s). All marked machines will be included in configuration.`);
+      setShowMarkModal(false);
+    } else {
+      setInfoMessage('No marked machines found. Mark machines in Machine Management first.');
+      setShowMarkModal(true);
+    }
+    
+    setLastRefresh(new Date());
+  }, []);
+
+  const getWindowsInfoForMachine = (machine) => {
+    if (!machine) {
+      console.error('Routing: No machine provided to getWindowsInfoForMachine');
+      return null;
+    }
+    
+    console.log(`Routing: Getting Windows info for machine: ${machine.name} (${machine.ip})`);
+    
+    if (!machine.password) {
+      console.error('Routing: No password found for machine:', machine.name);
+      return null;
+    }
+    
+    return {
+      ip: machine.ip,
+      username: machine.username || 'admin',
+      password: machine.password
+    };
+  };
+
+  const createPayloadForAllMachines = useCallback(() => {
+    if (!markedMachines || markedMachines.length === 0) {
+      console.error('Routing: No marked machines found');
+      return null;
+    }
+    
+    const windowsInfos = [];
+    
+    markedMachines.forEach(machine => {
+      const windowsInfo = getWindowsInfoForMachine(machine);
+      if (windowsInfo) {
+        windowsInfos.push(windowsInfo);
+      }
+    });
+    
+    if (windowsInfos.length === 0) {
+      console.error('Routing: Failed to get Windows info for any marked machine');
+      return null;
+    }
+    
+    console.log(`Routing: Creating payload for ${windowsInfos.length} machine(s)`);
+    
+    return {
+      windows_infos: windowsInfos
+    };
+  }, [markedMachines]);
+
+  const handleWebSocketMessage = useCallback((data) => {
+    console.log('Routing WebSocket message:', data);
+    
+    let command, result, errorMsg;
+    
+    if (data.response) {
+      const responseObj = data.response;
+      command = responseObj.command;
+      result = responseObj.result;
+      errorMsg = responseObj.error;
+    } else if (data.type === 'COMMAND_RESPONSE') {
+      command = data.command;
+      result = data.result || data.data;
+      errorMsg = data.error;
+    } else if (data.action === 'response') {
+      command = data.command;
+      result = data.result;
+      errorMsg = data.error;
+    } else if (data.command) {
+      command = data.command;
+      result = data.result || data.data;
+      errorMsg = data.error;
+    } else if (data.message) {
+      console.log('Backend log:', data.message);
+      return;
+    }
+    
+    if (!command) {
+      console.log('No command found in message:', data);
+      return;
+    }
+    
+    console.log(`Routing: Processing response for command: ${command}`, { result, errorMsg });
+    
+    if (errorMsg) {
+      console.log(`Routing: Error from backend for command ${command}:`, errorMsg);
+      setError(`Error: ${errorMsg}`);
+      setLoading(false);
+      return;
+    }
+    
+    const responseData = extractResult(result);
+    console.log('Routing: Extracted response data:', responseData);
+    
+    switch(command) {
+      case 'get_machine_info':
+        console.log('Routing: Received machine info');
+        if (responseData && responseData.machines) {
+          processMachineInfo(responseData.machines);
+        } else if (responseData && responseData.success === false) {
+          setGlobalError(responseData.error || 'Failed to fetch machine info');
+          setMachinesLoading(false);
+        }
+        break;
+        
+      case 'configure_RIP':
+        setLoading(false);
+        if (responseData && responseData.success !== false) {
+          alert('RIP configuration successful!');
+          resetRIPForm();
+          resetConnectionData();
+        } else {
+          alert('Error occurred. Try again');
+        }
+        break;
+        
+      case 'configure_OSPF':
+        setLoading(false);
+        if (responseData && responseData.success !== false) {
+          alert('OSPF configuration successful!');
+          resetOSPFForm();
+          resetConnectionData();
+        } else {
+          alert('Error occurred. Try again');
+        }
+        break;
+        
+      case 'Configure_Static':
+        setLoading(false);
+        if (responseData && responseData.success !== false) {
+          alert('Static route configuration successful!');
+          resetStaticForm();
+          resetConnectionData();
+        } else {
+          alert('Error occurred. Try again');
+        }
+        break;
+        
+      default:
+        console.log(`Routing: Unhandled command: ${command}`);
+    }
+  }, [processMachineInfo]);
 
   const resetRIPForm = () => {
     setRipNetworks(['']);
@@ -188,139 +347,53 @@ const Routing = () => {
     }));
   };
 
+  const validateConnectionData = () => {
+    const newErrors = {...validationErrors};
+    let hasError = false;
+
+    if (!connectionData.routerIp) {
+      newErrors.routerIp = 'Router IP is required';
+      hasError = true;
+    } else if (!isValidIPAddress(connectionData.routerIp)) {
+      newErrors.routerIp = 'Invalid IP address format. Use format: 192.168.1.1';
+      hasError = true;
+    } else {
+      newErrors.routerIp = '';
+    }
+
+    if (!connectionData.sshUsername) {
+      newErrors.sshUsername = 'SSH Username is required';
+      hasError = true;
+    } else {
+      newErrors.sshUsername = '';
+    }
+
+    if (!connectionData.sshPassword) {
+      newErrors.sshPassword = 'SSH Password is required';
+      hasError = true;
+    } else {
+      newErrors.sshPassword = '';
+    }
+
+    setValidationErrors(newErrors);
+    return !hasError;
+  };
+
   const togglePasswordVisibility = () => {
     setShowPassword(!showPassword);
   };
-  
-  useEffect(() => {
-    setValidationErrors(prev => ({
-      ...prev,
-      ripNetworks: [],
-      ospfProcessId: '',
-      ospfNetwork: '',
-      ospfArea: '',
-      staticNetwork: '',
-      staticMask: '',
-      staticNextHop: ''
-    }));
-    setError(null);
-  }, [activeTab]);
-  
-  useEffect(() => {
-    if (!addListener) return;
 
-    const handleWebSocketResponse = (event) => {
-      if (event.action === 'response') {
-        setLoading(false);
-        
-        const response = event.result;
-        const command = event.command;
-        
-        let responseMessage = '';
-        if (typeof response === 'string') {
-          responseMessage = response;
-        } else if (response && response.message) {
-          responseMessage = response.message;
-        } else if (response && response.data) {
-          responseMessage = JSON.stringify(response.data);
-        }
-        
-        const lowerResponse = responseMessage.toLowerCase();
-        if (command === 'configure_RIP') {
-          if (lowerResponse.includes('rip done')) {
-            alert('RIP configuration successful!');
-            resetRIPForm();
-            resetConnectionData();
-          } else {
-            alert('Error occurred. Try again');
-          }
-        }
-        else if (command === 'configure_OSPF') {
-          if (lowerResponse.includes('ospf done')) {
-            alert('OSPF configuration successful!');
-            resetOSPFForm(); 
-            resetConnectionData();
-          } else {
-            alert('Error occurred. Try again');
-          }
-        }
-        else if (command === 'Configure_Static') {
-          if (lowerResponse.includes('static done')) {
-            alert('Static route configuration successful!');
-            resetStaticForm();
-            resetConnectionData();
-          } else {
-            alert('Error occurred. Try again');
-          }
-        }
-      }
+  const buildPayloadWithMachines = (basePayload) => {
+    const machinesPayload = createPayloadForAllMachines();
+    
+    if (!machinesPayload || !machinesPayload.windows_infos) {
+      return basePayload;
+    }
+    
+    return {
+      ...basePayload,
+      windows_infos: machinesPayload.windows_infos
     };
-
-    const cleanup = addListener(handleWebSocketResponse);
-    return () => {
-      if (cleanup) cleanup();
-    };
-  }, [addListener]);
-
-  const handleConnectionChange = (e) => {
-    const { name, value } = e.target;
-    setConnectionData(prev => ({
-      ...prev,
-      [name]: value
-    }));
-    
-    if (name === 'routerIp') {
-      if (value && !isValidIPAddress(value)) {
-        setValidationErrors(prev => ({
-          ...prev,
-          routerIp: 'Invalid IP address format. Use format: 192.168.1.1'
-        }));
-      } else {
-        setValidationErrors(prev => ({
-          ...prev,
-          routerIp: ''
-        }));
-      }
-    }
-  };
-
-  const handleRipNetworkChange = (index, value) => {
-    const newNetworks = [...ripNetworks];
-    newNetworks[index] = value;
-    setRipNetworks(newNetworks);
-    
-    const newRipErrors = [...validationErrors.ripNetworks];
-    if (value && !isValidNetwork(value)) {
-      newRipErrors[index] = 'Invalid network format. Use format: 192.168.1.0 or 192.168.1.0/24';
-    } else {
-      newRipErrors[index] = '';
-    }
-    
-    setValidationErrors(prev => ({
-      ...prev,
-      ripNetworks: newRipErrors
-    }));
-  };
-
-  const addRipNetwork = () => {
-    setRipNetworks([...ripNetworks, '']);
-    setValidationErrors(prev => ({
-      ...prev,
-      ripNetworks: [...prev.ripNetworks, '']
-    }));
-  };
-
-  const removeRipNetwork = (index) => {
-    if (ripNetworks.length > 1) {
-      const newNetworks = ripNetworks.filter((_, i) => i !== index);
-      setRipNetworks(newNetworks);
-      
-      const newRipErrors = validationErrors.ripNetworks.filter((_, i) => i !== index);
-      setValidationErrors(prev => ({
-        ...prev,
-        ripNetworks: newRipErrors
-      }));
-    }
   };
 
   const handleRipSubmit = async () => {
@@ -360,17 +433,19 @@ const Routing = () => {
     setError(null);
 
     try {
-      const payload = {
+      const basePayload = {
         router_ip: connectionData.routerIp,
         ssh_username: connectionData.sshUsername,
         ssh_password: connectionData.sshPassword
       };
+      
       validNetworks.forEach((network, index) => {
-        payload[`network${index + 1}`] = network.trim();
+        basePayload[`network${index + 1}`] = network.trim();
       });
 
-      console.log('Sending RIP command with payload:', payload);
-      const commandId = sendCommand('configure_RIP', payload);
+      const finalPayload = buildPayloadWithMachines(basePayload);
+      
+      const commandId = sendCommand('configure_RIP', finalPayload);
       
       if (!commandId) {
         throw new Error('Failed to send command');
@@ -383,40 +458,8 @@ const Routing = () => {
     }
   };
 
-  const handleOspfChange = (e) => {
-    const { name, value } = e.target;
-    setOspfData(prev => ({
-      ...prev,
-      [name]: value
-    }));
-    
-    const newErrors = { ...validationErrors };
-    
-    if (name === 'processId') {
-      if (value && !isValidNumeric(value)) {
-        newErrors.ospfProcessId = 'Process ID must be a number';
-      } else {
-        newErrors.ospfProcessId = '';
-      }
-    } else if (name === 'network') {
-      if (value && !isValidNetwork(value)) {
-        newErrors.ospfNetwork = 'Invalid network format. Use format: 192.168.1.0/24';
-      } else {
-        newErrors.ospfNetwork = '';
-      }
-    } else if (name === 'area') {
-      if (value && !isValidOSPFArea(value)) {
-        newErrors.ospfArea = 'Invalid area. Use number (0-4294967295) or IP address format';
-      } else {
-        newErrors.ospfArea = '';
-      }
-    }
-    
-    setValidationErrors(newErrors);
-  };
-
   const handleOspfSubmit = async () => {
-    if (!validateConnectionData()){
+    if (!validateConnectionData()) {
       return;
     }
     let hasError = false;
@@ -456,7 +499,7 @@ const Routing = () => {
     setError(null);
 
     try {
-      const payload = {
+      const basePayload = {
         router_ip: connectionData.routerIp,
         ssh_username: connectionData.sshUsername,
         ssh_password: connectionData.sshPassword,
@@ -465,8 +508,9 @@ const Routing = () => {
         area: ospfData.area
       };
 
-      console.log('Sending OSPF command with payload:', payload);
-      const commandId = sendCommand('configure_OSPF', payload);
+      const finalPayload = buildPayloadWithMachines(basePayload);
+      
+      const commandId = sendCommand('configure_OSPF', finalPayload);
       
       if (!commandId) {
         throw new Error('Failed to send command');
@@ -479,40 +523,8 @@ const Routing = () => {
     }
   };
 
-  const handleStaticChange = (e) => {
-    const { name, value } = e.target;
-    setStaticData(prev => ({
-      ...prev,
-      [name]: value
-    }));
-    
-    const newErrors = { ...validationErrors };
-    
-    if (name === 'network') {
-      if (value && !isValidNetwork(value)) {
-        newErrors.staticNetwork = 'Invalid network format. Use format: 192.168.1.0';
-      } else {
-        newErrors.staticNetwork = '';
-      }
-    } else if (name === 'mask') {
-      if (value && !isValidSubnetMask(value)) {
-        newErrors.staticMask = 'Invalid subnet mask. Common masks: 255.255.255.0, 255.255.0.0, etc.';
-      } else {
-        newErrors.staticMask = '';
-      }
-    } else if (name === 'nextHop') {
-      if (value && !isValidIPAddress(value)) {
-        newErrors.staticNextHop = 'Invalid IP address format. Use format: 192.168.1.1';
-      } else {
-        newErrors.staticNextHop = '';
-      }
-    }
-    
-    setValidationErrors(newErrors);
-  };
-
   const handleStaticSubmit = async () => {
-    if(!validateConnectionData()){
+    if (!validateConnectionData()) {
       return;
     }
 
@@ -553,7 +565,7 @@ const Routing = () => {
     setError(null);
 
     try {
-      const payload = {
+      const basePayload = {
         router_ip: connectionData.routerIp,
         ssh_username: connectionData.sshUsername,
         ssh_password: connectionData.sshPassword,
@@ -562,8 +574,9 @@ const Routing = () => {
         next_hop: staticData.nextHop
       };
 
-      console.log('Sending Static command with payload:', payload);
-      const commandId = sendCommand('Configure_Static', payload);
+      const finalPayload = buildPayloadWithMachines(basePayload);
+      
+      const commandId = sendCommand('Configure_Static', finalPayload);
       
       if (!commandId) {
         throw new Error('Failed to send command');
@@ -574,6 +587,182 @@ const Routing = () => {
       alert('Error occurred. Try again');
       setLoading(false);
     }
+  };
+
+  const handleRefreshMachines = () => {
+    console.log('Routing: Refreshing machine list');
+    fetchMachineInfo();
+  };
+
+  const formatLastRefresh = () => {
+    return lastRefresh ? lastRefresh.toLocaleTimeString() : 'Never';
+  };
+
+  useEffect(() => {
+    if (!machineInfoListenerRef.current) {
+      console.log('Routing Component Mounted - Setting up WebSocket listener');
+      const removeListener = addListener(handleWebSocketMessage);
+      machineInfoListenerRef.current = true;
+      
+      return () => {
+        if (removeListener) removeListener();
+        machineInfoListenerRef.current = false;
+      };
+    }
+  }, [addListener, handleWebSocketMessage]);
+
+  useEffect(() => {
+    if (isConnected) {
+      console.log('Routing: Connected, fetching machine info...');
+      fetchMachineInfo();
+    }
+  }, [isConnected, fetchMachineInfo]);
+
+  useEffect(() => {
+    setValidationErrors(prev => ({
+      ...prev,
+      ripNetworks: [],
+      ospfProcessId: '',
+      ospfNetwork: '',
+      ospfArea: '',
+      staticNetwork: '',
+      staticMask: '',
+      staticNextHop: ''
+    }));
+    setError(null);
+  }, [activeTab]);
+
+  const MarkMachineModal = () => {
+    if (!showMarkModal) return null;
+
+    return (
+      <div className="modal-overlay">
+        <div className="modal-container">
+          <div className="modal-content">
+            <div className="modal-header">
+              <h3 className="modal-title">No Marked Machines Found</h3>
+            </div>
+            <div className="modal-body">
+              <div className="modal-message">
+                <p>No machines are currently marked with any roles.</p>
+                <p>To configure routing, you need to mark at least one machine in Machine Management.</p>
+              </div>
+              
+              <div className="modal-stats-grid">
+                <div className="modal-stat-item">
+                  <div className="modal-stat-label">MARKED MACHINES</div>
+                  <div className="modal-stat-value">{markedMachines.length}</div>
+                </div>
+                <div className="modal-stat-item">
+                  <div className="modal-stat-label">LAST REFRESH</div>
+                  <div className="modal-stat-value">{formatLastRefresh()}</div>
+                </div>
+                <div className="modal-stat-item">
+                  <button 
+                    className="modal-refresh-btn"
+                    onClick={handleRefreshMachines}
+                  >
+                    Refresh Machines
+                  </button>
+                </div>
+              </div>
+              
+              <div className="modal-actions">
+                <button 
+                  className="modal-btn-primary"
+                  onClick={() => {
+                    setShowMarkModal(false);
+                    window.location.href = '/machine-management';
+                  }}
+                >
+                  Go to Machine Management
+                </button>
+                <button 
+                  className="modal-btn-secondary"
+                  onClick={() => {
+                    setShowMarkModal(false);
+                    handleRefreshMachines();
+                  }}
+                >
+                  Refresh Machine List
+                </button>
+                <button 
+                  className="modal-btn-tertiary"
+                  onClick={() => setShowMarkModal(false)}
+                >
+                  Continue Anyway
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const MachineInfoPanel = () => {
+    if (!showMachineInfo) return null;
+
+    return (
+      <div className="machine-info-panel">
+        <div className="machine-info-header">
+          <h3 className="machine-info-title">
+            <Server size={20} />
+            <span>Marked Machines ({markedMachines.length})</span>
+          </h3>
+          <button 
+            className="close-panel-btn"
+            onClick={() => setShowMachineInfo(false)}
+            aria-label="Close machine info panel"
+          >
+            ×
+          </button>
+        </div>
+        
+        <div className="machine-info-content">
+          {machinesLoading ? (
+            <div className="loading-message">
+              <div className="loading-spinner"></div>
+              <p>Loading machines...</p>
+            </div>
+          ) : markedMachines.length === 0 ? (
+            <div className="no-machines-info">
+              <AlertCircle size={24} />
+              <p>No marked machines found.</p>
+              <button 
+                className="btn-primary small"
+                onClick={() => window.location.href = '/machine-management'}
+              >
+                Go to Machine Management
+              </button>
+            </div>
+          ) : (
+            <div className="machines-list-compact">
+              {markedMachines.map(machine => (
+                <div key={machine.id} className="machine-item-compact">
+                  <div className="machine-item-header">
+                    <span className="machine-name">{machine.name}</span>
+                    <span className="machine-ip">{machine.ip}</span>
+                  </div>
+                  <div className="machine-item-details">
+                    <span className="machine-user">User: {machine.username}</span>
+                    {machine.marked_as && machine.marked_as.length > 0 && (
+                      <div className="machine-roles-compact">
+                        {machine.marked_as.map((mark, idx) => (
+                          <span key={idx} className={`role-badge ${mark.role}`}>
+                            {mark.role}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    );
   };
 
   return (
@@ -597,10 +786,11 @@ const Routing = () => {
         </div>
        
         <div className="routing-main-card">
-          <div className="connection-details-section">
+          <div className="connection-header">
             <h2 className="form-title">Connection Details</h2>
-            <p className="form-description">Enter router SSH credentials for configuration</p>
-            
+          </div>
+          
+          <div className="connection-details-section">
             <div className="connection-grid">
               <div className="form-group">
                 <label htmlFor="routerIp">
@@ -611,7 +801,7 @@ const Routing = () => {
                   id="routerIp"
                   name="routerIp"
                   value={connectionData.routerIp}
-                  onChange={handleConnectionChange}
+                  onChange={(e) => setConnectionData({...connectionData, routerIp: e.target.value})}
                   placeholder="Enter Router IP (e.g., 192.168.1.1)"
                   disabled={loading}
                   required
@@ -631,7 +821,7 @@ const Routing = () => {
                   id="sshUsername"
                   name="sshUsername"
                   value={connectionData.sshUsername}
-                  onChange={handleConnectionChange}
+                  onChange={(e) => setConnectionData({...connectionData, sshUsername: e.target.value})}
                   placeholder="Enter SSH Username"
                   disabled={loading}
                   required
@@ -652,7 +842,7 @@ const Routing = () => {
                     id="sshPassword"
                     name="sshPassword"
                     value={connectionData.sshPassword}
-                    onChange={handleConnectionChange}
+                    onChange={(e) => setConnectionData({...connectionData, sshPassword: e.target.value})}
                     placeholder="Enter SSH Password"
                     disabled={loading}
                     required
@@ -703,7 +893,6 @@ const Routing = () => {
             {loading && (
               <div className="loading-message">
                 <div className="loading-spinner"></div>
-                <p>Sending command to device...</p>
               </div>
             )}
             
@@ -711,6 +900,12 @@ const Routing = () => {
               <div className="error-message">
                 <p>Error: {error}</p>
                 <button onClick={() => setError(null)}>Dismiss</button>
+              </div>
+            )}
+            
+            {!isConnected && (
+              <div className="warning-message">
+                <p>⚠️ Not connected to backend system. Please connect first.</p>
               </div>
             )}
             
@@ -730,7 +925,11 @@ const Routing = () => {
                           type="text"
                           id={`rip-network-${index}`}
                           value={network}
-                          onChange={(e) => handleRipNetworkChange(index, e.target.value)}
+                          onChange={(e) => {
+                            const newNetworks = [...ripNetworks];
+                            newNetworks[index] = e.target.value;
+                            setRipNetworks(newNetworks);
+                          }}
                           placeholder={`e.g., 192.168.${index + 1}.0/24`}
                           disabled={loading}
                           required={index === 0}
@@ -743,7 +942,10 @@ const Routing = () => {
                       {ripNetworks.length > 1 && (
                         <button
                           className="config-button remove-button"
-                          onClick={() => removeRipNetwork(index)}
+                          onClick={() => {
+                            const newNetworks = ripNetworks.filter((_, i) => i !== index);
+                            setRipNetworks(newNetworks);
+                          }}
                           disabled={loading}
                         >
                           <svg width="16" height="16" fill="currentColor" viewBox="0 0 16 16" style={{marginRight: '8px'}}>
@@ -759,7 +961,7 @@ const Routing = () => {
                 <div className="form-actions">
                   <button 
                     className="config-button add-button"
-                    onClick={addRipNetwork}
+                    onClick={() => setRipNetworks([...ripNetworks, ''])}
                     disabled={loading}
                   >
                     <svg width="16" height="16" fill="currentColor" viewBox="0 0 16 16" style={{marginRight: '8px'}}>
@@ -771,7 +973,8 @@ const Routing = () => {
                   <button 
                     className="config-button primary"
                     onClick={handleRipSubmit}
-                    disabled={loading || validationErrors.ripNetworks.some(error => error)}
+                    disabled={loading || validationErrors.ripNetworks.some(error => error) || !isConnected || markedMachines.length === 0}
+                    title={markedMachines.length === 0 ? "No marked machines found. Please mark machines in Machine Management first." : ""}
                   >
                     {loading ? 'Sending...' : 'Configure RIP'}
                   </button>
@@ -793,7 +996,7 @@ const Routing = () => {
                     id="processId"
                     name="processId"
                     value={ospfData.processId}
-                    onChange={handleOspfChange}
+                    onChange={(e) => setOspfData({...ospfData, processId: e.target.value})}
                     placeholder="Enter Process ID (e.g., 1)"
                     disabled={loading}
                     required
@@ -813,7 +1016,7 @@ const Routing = () => {
                     id="network"
                     name="network"
                     value={ospfData.network}
-                    onChange={handleOspfChange}
+                    onChange={(e) => setOspfData({...ospfData, network: e.target.value})}
                     placeholder="Enter Network (e.g., 192.168.1.0/24)"
                     disabled={loading}
                     required
@@ -833,7 +1036,7 @@ const Routing = () => {
                     id="area"
                     name="area"
                     value={ospfData.area}
-                    onChange={handleOspfChange}
+                    onChange={(e) => setOspfData({...ospfData, area: e.target.value})}
                     placeholder="Enter Area (e.g., 0 or 0.0.0.0)"
                     disabled={loading}
                     required
@@ -847,7 +1050,8 @@ const Routing = () => {
                 <button 
                   className="config-button primary"
                   onClick={handleOspfSubmit}
-                  disabled={loading || validationErrors.ospfProcessId || validationErrors.ospfNetwork || validationErrors.ospfArea}
+                  disabled={loading || validationErrors.ospfProcessId || validationErrors.ospfNetwork || validationErrors.ospfArea || !isConnected || markedMachines.length === 0}
+                  title={markedMachines.length === 0 ? "No marked machines found. Please mark machines in Machine Management first." : ""}
                 >
                   {loading ? 'Sending...' : 'Configure OSPF'}
                 </button>
@@ -868,7 +1072,7 @@ const Routing = () => {
                     id="staticNetwork"
                     name="network"
                     value={staticData.network}
-                    onChange={handleStaticChange}
+                    onChange={(e) => setStaticData({...staticData, network: e.target.value})}
                     placeholder="Enter Network (e.g., 192.168.1.0)"
                     disabled={loading}
                     required
@@ -888,7 +1092,7 @@ const Routing = () => {
                     id="mask"
                     name="mask"
                     value={staticData.mask}
-                    onChange={handleStaticChange}
+                    onChange={(e) => setStaticData({...staticData, mask: e.target.value})}
                     placeholder="Enter Mask (e.g., 255.255.255.0)"
                     disabled={loading}
                     required
@@ -908,7 +1112,7 @@ const Routing = () => {
                     id="nextHop"
                     name="nextHop"
                     value={staticData.nextHop}
-                    onChange={handleStaticChange}
+                    onChange={(e) => setStaticData({...staticData, nextHop: e.target.value})}
                     placeholder="Enter Next Hop (e.g., 192.168.1.1)"
                     disabled={loading}
                     required
@@ -922,7 +1126,8 @@ const Routing = () => {
                 <button 
                   className="config-button primary"
                   onClick={handleStaticSubmit}
-                  disabled={loading || validationErrors.staticNetwork || validationErrors.staticMask || validationErrors.staticNextHop}
+                  disabled={loading || validationErrors.staticNetwork || validationErrors.staticMask || validationErrors.staticNextHop || !isConnected || markedMachines.length === 0}
+                  title={markedMachines.length === 0 ? "No marked machines found. Please mark machines in Machine Management first." : ""}
                 >
                   {loading ? 'Sending...' : 'Configure Static Route'}
                 </button>
@@ -931,6 +1136,22 @@ const Routing = () => {
           </div>
         </div>
       </div>
+
+      <MarkMachineModal />
+      <MachineInfoPanel />
+
+      {globalError && (
+        <div className="error-message-global">
+          <div className="error-icon">⚠️</div>
+          <div className="error-text">{globalError}</div>
+          <button 
+            className="btn-close-error" 
+            onClick={() => setGlobalError(null)}
+          >
+            ×
+          </button>
+        </div>
+      )}
     </div>
   );
 };
