@@ -34,7 +34,7 @@ function DNSConfiguration() {
   const [checkingStatus, setCheckingStatus] = useState(true); 
   const [dnsMachines, setDnsMachines] = useState([]);
   const [noDnsConfigured, setNoDnsConfigured] = useState(false);
-  const [showNoDnsModal, setShowNoDnsModal] = useState(false);
+  const [showNoDnsModal, setShowNoDnsModal] = useState(false); // New state for modal
   const [newlyCreatedZones, setNewlyCreatedZones] = useState([]);
   const [newlyCreatedRecords, setNewlyCreatedRecords] = useState([]);
   
@@ -81,6 +81,42 @@ function DNSConfiguration() {
     'Resource Monitor', 'WDS', 'Networking', 'Machine Management', 
     'Active Directory', 'Routing'
   ];
+
+  const getTotalZonesCount = () => {
+    return (zones.primary.forward.length + zones.primary.reverse.length + 
+            zones.secondary.forward.length + zones.secondary.reverse.length);
+  };
+
+  const getTotalRecordsCount = () => {
+    let total = 0;
+    const allZones = [
+      ...zones.primary.forward,
+      ...zones.primary.reverse,
+      ...zones.secondary.forward,
+      ...zones.secondary.reverse
+    ];
+    allZones.forEach(zone => {
+      total += zone.recordCount || 0;
+    });
+    return total;
+  };
+
+  const formatLastRefreshTime = () => {
+    if (!lastCommandTimeRef.current) return 'Never';
+    
+    const now = new Date();
+    const diffMs = now - lastCommandTimeRef.current;
+    const diffSec = Math.floor(diffMs / 1000);
+    
+    if (diffSec < 60) return `${diffSec} seconds ago`;
+    if (diffSec < 3600) return `${Math.floor(diffSec / 60)} minutes ago`;
+    return `${Math.floor(diffSec / 3600)} hours ago`;
+  };
+
+  const handleRefreshMachines = () => {
+    console.log('DNS: Refreshing machine list');
+    getDnsMachinesFromDatabase();
+  };
 
   useEffect(() => {
     zonesDataRef.current = zones;
@@ -1411,18 +1447,6 @@ function DNSConfiguration() {
     sendCommand(command, payload);
   };
 
-  const formatLastRefreshTime = () => {
-    if (!lastCommandTimeRef.current) return 'Never';
-    
-    const now = new Date();
-    const diffMs = now - lastCommandTimeRef.current;
-    const diffSec = Math.floor(diffMs / 1000);
-    
-    if (diffSec < 60) return `${diffSec} seconds ago`;
-    if (diffSec < 3600) return `${Math.floor(diffSec / 60)} minutes ago`;
-    return `${Math.floor(diffSec / 3600)} hours ago`;
-  };
-
   const getAllZones = useCallback(() => {
     const allZones = [];
     const primaryMachine = getMachineByType('primary');
@@ -1882,6 +1906,78 @@ function DNSConfiguration() {
     );
   };
 
+  const NoDnsModal = () => {
+    if (!showNoDnsModal) return null;
+
+    return (
+      <div className="modal-overlay">
+        <div className="modal-container">
+          <div className="modal-content">
+            <div className="modal-header">
+              <h3 className="modal-title">No DNS Machines Configured</h3>
+            </div>
+            <div className="modal-body">
+              <div className="modal-message">
+                <p>No machines are currently marked as DNS primary or secondary roles.</p>
+                <p>To manage DNS configuration, you need to mark at least one machine as DNS in Machine Management.</p>
+              </div>
+              
+              <div className="modal-stats-grid">
+                <div className="modal-stat-item">
+                  <div className="modal-stat-label">TOTAL ZONES</div>
+                  <div className="modal-stat-value">{getTotalZonesCount()}</div>
+                </div>
+                <div className="modal-stat-item">
+                  <div className="modal-stat-label">TOTAL RECORDS</div>
+                  <div className="modal-stat-value">{getTotalRecordsCount()}</div>
+                </div>
+                <div className="modal-stat-item">
+                  <div className="modal-stat-label">LAST REFRESH</div>
+                  <div className="modal-stat-value">{formatLastRefreshTime()}</div>
+                </div>
+                <div className="modal-stat-item">
+                  <button 
+                    className="modal-refresh-btn"
+                    onClick={handleRefreshMachines}
+                  >
+                    Refresh Machines
+                  </button>
+                </div>
+              </div>
+              
+              <div className="modal-actions">
+                <button 
+                  className="modal-btn-primary"
+                  onClick={() => {
+                    setShowNoDnsModal(false);
+                    window.location.href = '/machine-management';
+                  }}
+                >
+                  Go to Machine Management
+                </button>
+                <button 
+                  className="modal-btn-secondary"
+                  onClick={() => {
+                    setShowNoDnsModal(false);
+                    handleRefreshMachines();
+                  }}
+                >
+                  Refresh Machine List
+                </button>
+                <button 
+                  className="modal-btn-tertiary"
+                  onClick={() => setShowNoDnsModal(false)}
+                >
+                  Continue Anyway
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   useEffect(() => {
     if (!listenerAdded.current) {
       console.log(' DNS Component Mounted - Setting up WebSocket listener');
@@ -2131,6 +2227,8 @@ function DNSConfiguration() {
           </div>
         )}
       </div>
+
+      <NoDnsModal />
 
       {showInstallModal && (
         <div className="modal-overlay">
