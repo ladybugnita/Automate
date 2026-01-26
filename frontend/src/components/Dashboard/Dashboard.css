@@ -120,9 +120,6 @@
   padding: var(--spacing-8) 0;
 }
 
-.left-spacer,
-.right-spacer {}
-
 .content-area {
   padding: 0 var(--spacing-8);
 }
@@ -138,8 +135,6 @@
   flex-direction: column;
   margin-bottom: var(--spacing-8);
 }
-
-.system-info-card {}
 
 .stats-layout {
   display: grid;
