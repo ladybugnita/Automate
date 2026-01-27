@@ -78,7 +78,7 @@ function DNSConfiguration() {
 
   const navItems = [
     'Dashboard', 'DNS Configuration', 'Event Viewer', 'DHCP', 'Users', 
-    'Resource Monitor', 'Switch', 'Machine Management', 
+    'Resource Monitor', 'ESXi','Switch', 'Machine Management', 
     'Active Directory', 'Routing'
   ];
 
