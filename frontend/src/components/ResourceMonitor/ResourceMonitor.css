@@ -844,8 +844,6 @@ input:checked + .toggle-slider:before {
     width: 100%;
     justify-content: space-between;
   }
-  
-  
 }
 
 @media (max-width: 480px) {
@@ -882,9 +880,6 @@ input:checked + .toggle-slider:before {
     grid-template-columns: 1fr;
   }
 }
-/* Add these styles to your existing ResourceMonitor.css */
-
-/* Reuse Users component styles */
 .users-content {
   padding: var(--spacing-6);
 }
@@ -953,7 +948,6 @@ input:checked + .toggle-slider:before {
   gap: var(--spacing-4);
 }
 
-/* Stats and Controls Card */
 .stats-controls-card {
   background: var(--white);
   border-radius: var(--border-radius-lg);
@@ -1061,7 +1055,6 @@ input:checked + .toggle-slider:before {
   letter-spacing: 0.05em;
 }
 
-/* Machine Overview Section */
 .machine-overview-section {
   background: var(--white);
   border-radius: var(--border-radius-lg);
@@ -1146,7 +1139,6 @@ input:checked + .toggle-slider:before {
   color: var(--primary-color);
 }
 
-/* Monitor Content Area */
 .monitor-content-area {
   background: var(--white);
   border-radius: var(--border-radius-lg);
@@ -1201,7 +1193,6 @@ input:checked + .toggle-slider:before {
   box-shadow: 0 0 0 2px rgba(22, 101, 52, 0.1);
 }
 
-/* No Machines Message */
 .no-machines-message {
   text-align: center;
   padding: var(--spacing-8);
@@ -1242,7 +1233,6 @@ input:checked + .toggle-slider:before {
   box-shadow: var(--shadow-md);
 }
 
-/* Error Message Global */
 .error-message-global {
   position: fixed;
   bottom: var(--spacing-5);
@@ -1295,7 +1285,6 @@ input:checked + .toggle-slider:before {
   opacity: 1;
 }
 
-/* Responsive Design */
 @media (max-width: 1200px) {
   .users-grid {
     grid-template-columns: 1fr;

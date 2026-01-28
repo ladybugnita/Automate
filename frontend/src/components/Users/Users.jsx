@@ -9,6 +9,8 @@ const Users = () => {
   const [showMarkModal, setShowMarkModal] = useState(false);
   
   const [allUsers, setAllUsers] = useState({}); 
+  const [selectedMachine, setSelectedMachine] = useState('');
+  const [selectedMachineUsers, setSelectedMachineUsers] = useState([]);
   const [usersLoading, setUsersLoading] = useState(false);
   const [lastRefresh, setLastRefresh] = useState(null);
   const [error, setError] = useState(null);
@@ -102,6 +104,25 @@ const Users = () => {
     };
   };
 
+  const createUsersPayloadForSingleMachine = useCallback((machine) => {
+    if (!machine) {
+      console.error('Users: No machine selected');
+      setError('No machine selected');
+      return null;
+    }
+    
+    const windowsInfo = getWindowsInfoForMachine(machine);
+    if (!windowsInfo) {
+      return null;
+    }
+    
+    console.log(`Users: Creating payload for single machine: ${machine.name}`);
+    
+    return {
+      windows_info: windowsInfo
+    };
+  }, []);
+
   const createUsersPayloadForAllMachines = useCallback((machines) => {
     if (!machines || machines.length === 0) {
       console.error('Users: No marked machines found');
@@ -193,28 +214,26 @@ const Users = () => {
         break;
         
       case 'get_logged_users':
-        console.log('Users: Processing logged users response for ALL machines');
-        if (responseData && responseData.success !== false && responseData.data) {
-          const usersByMachine = {};
+        console.log('Users: Processing logged users response');
+        if (responseData && responseData.success !== false) {
+          let usersByMachine = {};
           
-          if (Array.isArray(responseData.data)) {
-            responseData.data.forEach(userData => {
-              if (userData.machine_ip) {
-                if (!usersByMachine[userData.machine_ip]) {
-                  usersByMachine[userData.machine_ip] = [];
-                }
-                if (Array.isArray(userData.users)) {
-                  usersByMachine[userData.machine_ip] = userData.users;
-                } else {
-                  usersByMachine[userData.machine_ip].push(userData);
-                }
-              }
-            });
-          } else if (responseData.data && typeof responseData.data === 'object') {
+          if (responseData.data && typeof responseData.data === 'object') {
             Object.keys(responseData.data).forEach(machineIp => {
               const machineUsers = responseData.data[machineIp];
               if (Array.isArray(machineUsers)) {
                 usersByMachine[machineIp] = machineUsers;
+              }
+            });
+          }
+          
+          if (responseData.users_array && Array.isArray(responseData.users_array)) {
+            responseData.users_array.forEach(user => {
+              if (user.machine_ip) {
+                if (!usersByMachine[user.machine_ip]) {
+                  usersByMachine[user.machine_ip] = [];
+                }
+                usersByMachine[user.machine_ip].push(user);
               }
             });
           }
@@ -225,6 +244,12 @@ const Users = () => {
           setLastRefresh(new Date());
           isFetchingRef.current = false;
           
+          if (selectedMachine && usersByMachine[selectedMachine]) {
+            setSelectedMachineUsers(usersByMachine[selectedMachine]);
+          } else if (selectedMachine) {
+            setSelectedMachineUsers([]);
+          }
+          
           if (timeoutRef.current) {
             clearTimeout(timeoutRef.current);
             timeoutRef.current = null;
@@ -232,6 +257,7 @@ const Users = () => {
         } else {
           console.log('Users: No valid user data in response');
           setAllUsers({});
+          setSelectedMachineUsers([]);
           setUsersLoading(false);
           isFetchingRef.current = false;
         }
@@ -244,8 +270,11 @@ const Users = () => {
         if (responseData && responseData.success !== false) {
           alert('User added successfully!');
           setNewUser({ machineIp: '', username: '', password: '' });
-          if (markedMachines.length > 0) {
-            fetchUsersForAllMachines(markedMachines);
+          if (selectedMachine) {
+            const machine = markedMachines.find(m => m.ip === selectedMachine);
+            if (machine) {
+              fetchUsersForSingleMachine(machine);
+            }
           }
         } else {
           const errorMsg = responseData?.error || 'Failed to add user';
@@ -257,7 +286,46 @@ const Users = () => {
         console.log(`Users: Unhandled command: ${command}`);
     }
     
-  }, [processMachineInfo, markedMachines]);
+  }, [processMachineInfo, selectedMachine, markedMachines]);
+
+  const fetchUsersForSingleMachine = useCallback((machine) => {
+    if (isFetchingRef.current) {
+      console.log('Users: Already fetching users, skipping...');
+      return;
+    }
+
+    if (!isConnected) {
+      console.log('Users: WebSocket not connected');
+      setError('Not connected to backend system');
+      return;
+    }
+
+    console.log(`Users: Fetching users for single machine: ${machine.name} (${machine.ip})`);
+    setUsersLoading(true);
+    setError(null);
+    isFetchingRef.current = true;
+    
+    const payload = createUsersPayloadForSingleMachine(machine);
+    if (!payload) {
+      setUsersLoading(false);
+      isFetchingRef.current = false;
+      return;
+    }
+    
+    console.log('Users: Sending get_logged_users command for single machine');
+    sendCommand('get_logged_users', payload);
+    
+    timeoutRef.current = setTimeout(() => {
+      if (isFetchingRef.current) {
+        console.log('Users: Timeout: No response from backend');
+        setError('Timeout: No response from server');
+        setUsersLoading(false);
+        isFetchingRef.current = false;
+        timeoutRef.current = null;
+      }
+    }, 20000);
+    
+  }, [isConnected, sendCommand, createUsersPayloadForSingleMachine]);
 
   const fetchUsersForAllMachines = useCallback((machines = markedMachines) => {
     if (isFetchingRef.current) {
@@ -304,7 +372,19 @@ const Users = () => {
     
   }, [isConnected, markedMachines, sendCommand, createUsersPayloadForAllMachines]);
 
-  const handleManualRefresh = useCallback(() => {
+  const handleMachineSelect = useCallback((machineIp) => {
+    setSelectedMachine(machineIp);
+    setSelectedMachineUsers(allUsers[machineIp] || []);
+    
+    if (machineIp && !allUsers[machineIp]) {
+      const machine = markedMachines.find(m => m.ip === machineIp);
+      if (machine) {
+        fetchUsersForSingleMachine(machine);
+      }
+    }
+  }, [allUsers, markedMachines, fetchUsersForSingleMachine]);
+
+  const handleManualRefresh = useCallback((machineIp = null) => {
     if (!isConnected) {
       alert('Cannot refresh: Not connected to backend system');
       return;
@@ -320,8 +400,15 @@ const Users = () => {
       return;
     }
     
-    fetchUsersForAllMachines();
-  }, [isConnected, markedMachines.length, fetchUsersForAllMachines, isFetchingRef]);
+    if (machineIp) {
+      const machine = markedMachines.find(m => m.ip === machineIp);
+      if (machine) {
+        fetchUsersForSingleMachine(machine);
+      }
+    } else {
+      fetchUsersForAllMachines();
+    }
+  }, [isConnected, markedMachines.length, fetchUsersForAllMachines, fetchUsersForSingleMachine, isFetchingRef]);
 
   const handleRefreshMachines = () => {
     console.log('Users: Refreshing machine list');
@@ -356,19 +443,19 @@ const Users = () => {
 
     setLoading(true);
     
-    const selectedMachine = markedMachines.find(m => m.ip === newUser.machineIp);
-    if (!selectedMachine) {
+    const selectedMachineObj = markedMachines.find(m => m.ip === newUser.machineIp);
+    if (!selectedMachineObj) {
       alert('Selected machine not found');
       setLoading(false);
       return;
     }
 
     console.log('Users: Adding user to machine:', {
-      machine: selectedMachine.name,
+      machine: selectedMachineObj.name,
       username: newUser.username
     });
 
-    const windowsInfo = getWindowsInfoForMachine(selectedMachine);
+    const windowsInfo = getWindowsInfoForMachine(selectedMachineObj);
     if (!windowsInfo) {
       setLoading(false);
       return;
@@ -388,6 +475,27 @@ const Users = () => {
     try {
       const date = new Date(dateString);
       return isNaN(date.getTime()) ? 'Never' : date.toLocaleDateString() + ' ' + date.toLocaleTimeString();
+    } catch {
+      return 'Never';
+    }
+  };
+
+  const formatTimeAgo = (dateString) => {
+    if (!dateString || dateString === 'Never' || dateString === 'null') return 'Never';
+    try {
+      const date = new Date(dateString);
+      if (isNaN(date.getTime())) return 'Never';
+      
+      const now = new Date();
+      const diffMs = now - date;
+      const diffMins = Math.floor(diffMs / (1000 * 60));
+      const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+      const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+      
+      if (diffDays > 0) return `${diffDays} day${diffDays > 1 ? 's' : ''} ago`;
+      if (diffHours > 0) return `${diffHours} hour${diffHours > 1 ? 's' : ''} ago`;
+      if (diffMins > 0) return `${diffMins} minute${diffMins > 1 ? 's' : ''} ago`;
+      return 'Just now';
     } catch {
       return 'Never';
     }
@@ -556,7 +664,7 @@ const Users = () => {
                     {machinesLoading ? 'Loading...' : 'Refresh Machines'}
                   </button>
                   <button
-                    onClick={handleManualRefresh}
+                    onClick={() => handleManualRefresh()}
                     className="refresh-button"
                     disabled={usersLoading || !isConnected || isFetchingRef.current || markedMachines.length === 0}
                   >
@@ -564,35 +672,13 @@ const Users = () => {
                   </button>
                 </div>
               </div>
-              
-              <div className="stats-grid">
-                <div className="stat-item">
-                  <div className="stat-count">{markedMachines.length}</div>
-                  <div className="stat-label">Marked Machines</div>
-                </div>
-                <div className="stat-item">
-                  <div className="stat-count">{getTotalUsersCount()}</div>
-                  <div className="stat-label">Total Users</div>
-                </div>
-                <div className="stat-item">
-                  <div className="stat-count">
-                    {getEnabledUsersCount()}
-                  </div>
-                  <div className="stat-label">Enabled Users</div>
-                </div>
-                <div className="stat-item">
-                  <div className="stat-count">
-                    {lastRefresh ? formatLastRefresh() : 'Never'}
-                  </div>
-                  <div className="stat-label">Last Refresh</div>
-                </div>
-              </div>
+
             </div>
 
             <div className="machine-list-card">
               <div className="machine-list-header">
                 <h3 className="section-title">
-                  Marked Machines ({markedMachines.length})
+                  Select Machine ({markedMachines.length})
                 </h3>
                 <div className="machine-list-status">
                   {isConnected ? 'Connected' : 'Disconnected'}
@@ -612,61 +698,55 @@ const Users = () => {
                   </div>
                 </div>
               ) : (
-                <div className="machine-list">
-                  {markedMachines.map(machine => {
-                    const machineUsers = getUsersForMachine(machine.ip);
-                    const enabledUsers = Array.isArray(machineUsers) ? 
-                      machineUsers.filter(u => u.Enabled).length : 0;
-                    
-                    return (
-                      <div 
-                        key={machine.id}
-                        className="machine-item"
-                      >
-                        <div className="machine-item-header">
-                          <div className="machine-item-name">{machine.name}</div>
-                          <div className="machine-item-users-count">
-                            {Array.isArray(machineUsers) ? machineUsers.length : 0} users
-                            {enabledUsers > 0 && (
-                              <span className="enabled-users-count"> ({enabledUsers} enabled)</span>
-                            )}
-                          </div>
+                <div className="machine-select-container">
+                  <div className="select-wrapper">
+                    <select
+                      value={selectedMachine}
+                      onChange={(e) => handleMachineSelect(e.target.value)}
+                      className="machine-select"
+                    ><option value="">Select a machine to view users...</option>
+                      {markedMachines.map(machine => (
+                        <option key={machine.id} value={machine.ip}>
+                          {machine.name} ({machine.ip}) - {getUsersForMachine(machine.ip).length} users
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  
+                  {selectedMachine && (
+                    <div className="selected-machine-info">
+                      <div className="selected-machine-header">
+                        <div className="selected-machine-name">
+                          {markedMachines.find(m => m.ip === selectedMachine)?.name}
                         </div>
-                        <div className="machine-item-ip">{machine.ip}</div>
-                        <div className="machine-item-user">{machine.username}</div>
-                        {machine.marked_as && Array.isArray(machine.marked_as) && machine.marked_as.length > 0 && (
-                          <div className="machine-item-roles">
-                            {machine.marked_as.map((mark, idx) => (
-                              <span key={idx} className={`role-badge ${mark.role}`}>
-                                {mark.role} {mark.type}
-                              </span>
-                            ))}
-                          </div>
-                        )}
-                        
-                        {Array.isArray(machineUsers) && machineUsers.length > 0 && (
-                          <div className="machine-users-list">
-                            {machineUsers.slice(0, 3).map((user, idx) => (
-                              <div key={idx} className="user-item-small">
-                                <span className={`user-status ${user.Enabled ? 'enabled' : 'disabled'}`}>
-                                  ●
-                                </span>
-                                <span className="user-name-small">{user.Name}</span>
-                                <span className="user-logon-small">
-                                  {formatDate(user.LastLogon)}
-                                </span>
-                              </div>
-                            ))}
-                            {machineUsers.length > 3 && (
-                              <div className="more-users">
-                                +{machineUsers.length - 3} more users
-                              </div>
-                            )}
-                          </div>
-                        )}
+                        <button
+                          onClick={() => handleManualRefresh(selectedMachine)}
+                          className="refresh-single-btn"
+                          disabled={usersLoading}
+                        >
+                          {usersLoading ? 'Refreshing...' : '⟳ Refresh'}
+                        </button>
                       </div>
-                    );
-                  })}
+                      <div className="selected-machine-details">
+                        <div className="machine-detail-item">
+                          <span className="detail-label">IP Address:</span>
+                          <span className="detail-value">{selectedMachine}</span>
+                        </div>
+                        <div className="machine-detail-item">
+                          <span className="detail-label">Username:</span>
+                          <span className="detail-value">
+                            {markedMachines.find(m => m.ip === selectedMachine)?.username}
+                          </span>
+                        </div>
+                        <div className="machine-detail-item">
+                          <span className="detail-label">Roles:</span>
+                          <span className="detail-value">
+                            {getMachineRoles(markedMachines.find(m => m.ip === selectedMachine))}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -692,19 +772,21 @@ const Users = () => {
                   <>
                     <div className="form-group">
                       <label className="form-label">Select Machine</label>
-                      <select
-                        value={newUser.machineIp}
-                        onChange={(e) => setNewUser({ ...newUser, machineIp: e.target.value })}
-                        className="form-select"
-                        disabled={loading || !isConnected}
-                      >
-                        <option value="">Choose a machine...</option>
-                        {markedMachines.map(machine => (
-                          <option key={machine.id} value={machine.ip}>
-                            {machine.name} ({machine.ip})
-                          </option>
-                        ))}
-                      </select>
+                      <div className="select-wrapper">
+                        <select
+                          value={newUser.machineIp}
+                          onChange={(e) => setNewUser({ ...newUser, machineIp: e.target.value })}
+                          className="form-select"
+                          disabled={loading || !isConnected}
+                        >
+                          <option value="">Choose a machine...</option>
+                          {markedMachines.map(machine => (
+                            <option key={machine.id} value={machine.ip}>
+                              {machine.name} ({machine.ip})
+                            </option>
+                          ))}
+                        </select>
+                      </div>
                     </div>
                     
                     {newUser.machineIp && (
@@ -754,9 +836,20 @@ const Users = () => {
             <div className="all-users-card">
               <div className="all-users-header">
                 <h3 className="section-title">
-                  All Users ({getTotalUsersCount()})
+                  {selectedMachine ? 
+                    `Users on ${markedMachines.find(m => m.ip === selectedMachine)?.name} (${selectedMachineUsers.length})` :
+                    `All Users (${getTotalUsersCount()})`
+                  }
                   {usersLoading && <span className="loading-indicator"> ⟳ Loading...</span>}
                 </h3>
+                {selectedMachine && (
+                  <button
+                    onClick={() => setSelectedMachine('')}
+                    className="view-all-users-btn"
+                  >
+                    View All Users
+                  </button>
+                )}
               </div>
               
               <div className="all-users-table-container">
@@ -768,51 +861,89 @@ const Users = () => {
                   <div className="no-machines-message">
                     No marked machines to display users from.
                   </div>
-                ) : getTotalUsersCount() === 0 ? (
+                ) : (!selectedMachine && getTotalUsersCount() === 0) || (selectedMachine && selectedMachineUsers.length === 0) ? (
                   <div className="no-users-message">
-                    No users found on any marked machine.
+                    {selectedMachine ? 
+                      `No users found on selected machine. Click "Refresh" to load users.` :
+                      `No users found on any marked machine. Select a machine to view users or click "Refresh All Users".`
+                    }
                   </div>
                 ) : (
-                  <div className="all-users-tables">
-                    {markedMachines.map(machine => {
-                      const machineUsers = getUsersForMachine(machine.ip);
-                      if (!Array.isArray(machineUsers) || machineUsers.length === 0) {
-                        return null;
-                      }
-                      
-                      return (
-                        <div key={machine.id} className="machine-users-table">
-                          <div className="machine-users-header">
-                            <h4>{machine.name} ({machine.ip})</h4>
-                            <span className="users-count">{machineUsers.length} users</span>
-                          </div>
-                          <table className="users-table-small">
-                            <thead>
-                              <tr>
-                                <th>Username</th>
-                                <th>Enabled</th>
-                                <th>Last Logon</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {machineUsers.map((user, index) => (
-                                <tr key={index}>
-                                  <td>{user.Name}</td>
-                                  <td>
-                                    <span className={`status-badge-small ${user.Enabled ? 'enabled' : 'disabled'}`}>
-                                      {user.Enabled ? 'Yes' : 'No'}
+                  <div className="users-table-wrapper">
+                    <table className="users-table">
+                      <thead>
+                        <tr>
+                          <th className="table-header-username">Username</th>
+                          <th className="table-header-fullname">Full Name</th>
+                          <th className="table-header-status">Status</th>
+                          <th className="table-header-logon">Last Logon</th>
+                          <th className="table-header-groups">Groups</th>
+                          <th className="table-header-dept">Department</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(selectedMachine ? selectedMachineUsers : 
+                          Object.values(allUsers).flat()).map((user, index) => (
+                          <tr key={index} className={`user-row ${user.Enabled ? 'enabled' : 'disabled'}`}>
+                            <td className="username-cell">
+                              <div className="user-avatar">
+                                {user.Name?.charAt(0).toUpperCase() || 'U'}
+                              </div>
+                              <div className="user-details">
+                                <div className="user-name" title={user.Name}>
+                                  {user.Name}
+                                </div>
+                                <div className="user-email" title={user.Email || user.UserPrincipalName || 'No email'}>
+                                  {user.Email || user.UserPrincipalName || 'No email'}
+                                </div>
+                              </div>
+                            </td>
+                            <td className="fullname-cell" title={user.FullName || 'N/A'}>
+                              {user.FullName || 'N/A'}
+                            </td>
+                            <td className="status-cell">
+                              <span className={`status-badge ${user.Enabled ? 'enabled' : 'disabled'}`}>
+                                {user.Enabled ? 'Enabled' : 'Disabled'}
+                              </span>
+                              {user.AccountLockedOut && (
+                                <span className="status-badge locked">Locked</span>
+                              )}
+                            </td>
+                            <td className="logon-cell">
+                              <div className="logon-time" title={formatDate(user.LastLogon)}>
+                                {formatDate(user.LastLogon)}
+                              </div>
+                              <div className="logon-ago">
+                                {formatTimeAgo(user.LastLogon)}
+                              </div>
+                            </td>
+                            <td className="groups-cell">
+                              {user.Groups && Array.isArray(user.Groups) && user.Groups.length > 0 ? (
+                                <div className="groups-tags">
+                                  {user.Groups.slice(0, 2).map((group, idx) => (
+                                    <span key={idx} className="group-tag" title={group}>
+                                      {group}
                                     </span>
-                                  </td>
-                                  <td className="last-logon-cell">
-                                    {formatDate(user.LastLogon)}
-                                  </td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      );
-                    })}
+                                  ))}
+                                  {user.Groups.length > 2 && (
+                                    <span className="more-groups" title={user.Groups.slice(2).join(', ')}>
+                                      +{user.Groups.length - 2}
+                                    </span>
+                                  )}
+                                </div>
+                              ) : (
+                                <span className="no-groups">No groups</span>
+                              )}
+                            </td>
+                            <td className="department-cell">
+                              <span className="department-badge" title={user.Department || 'N/A'}>
+                                {user.Department || 'N/A'}
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
                   </div>
                 )}
               </div>

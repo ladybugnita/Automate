@@ -220,7 +220,6 @@ const ESXI = () => {
           installationStarted.current = false;
           setLoading(false);
           
-          // Clear form data
           installFormRef.current = {
             ip: '',
             username: 'root',
@@ -662,7 +661,6 @@ const ESXI = () => {
       }
     `;
     
-    // Check if style already exists
     const existingStyle = document.getElementById('esxi-input-fix-styles');
     if (existingStyle) {
       existingStyle.remove();
