@@ -50,6 +50,7 @@ const EventViewer = () => {
     const [markedMachines, setMarkedMachines] = useState([]);
     const [machinesLoading, setMachinesLoading] = useState(true);
     const [showMarkModal, setShowMarkModal] = useState(false);
+    const [selectedMachine, setSelectedMachine] = useState('');
     const [error, setError] = useState(null);
     
     const isFetchingRef = useRef(false);
@@ -107,7 +108,7 @@ const EventViewer = () => {
         
         if (markedMachinesList.length > 0) {
             console.log('Event Viewer: Automatically fetching events for all marked machines');
-            fetchEventData(markedMachinesList);
+            fetchEventDataForAllMachines(markedMachinesList);
         } else {
             setShowMarkModal(true);
         }
@@ -134,7 +135,27 @@ const EventViewer = () => {
         };
     };
 
-    const createEventViewerPayload = (machines) => {
+    const createEventViewerPayloadForSingleMachine = useCallback((machine) => {
+        if (!machine) {
+            console.error('Event Viewer: No machine selected');
+            setError('No machine selected');
+            return null;
+        }
+        
+        const windowsInfo = getWindowsInfoForMachine(machine);
+        if (!windowsInfo) {
+            return null;
+        }
+        
+        console.log(`Event Viewer: Creating payload for single machine: ${machine.name}`);
+        
+        // Send only credentials, not log_name
+        return {
+            windows_info: windowsInfo
+        };
+    }, []);
+
+    const createEventViewerPayloadForAllMachines = useCallback((machines) => {
         if (!machines || machines.length === 0) {
             console.error('Event Viewer: No marked machines found');
             setError('No marked machines found. Please mark machines as DNS, DHCP, or AD in Machine Management first.');
@@ -158,10 +179,50 @@ const EventViewer = () => {
         
         console.log(`Event Viewer: Creating payload for ${windowsInfos.length} machine(s)`);
         
+        // Send only credentials, not log_name
         return {
-            windows_infos: windowsInfos,
-            log_name: selectedCategory 
+            windows_infos: windowsInfos
         };
+    }, []);
+
+    const categorizeEvent = (event) => {
+        // Try to get log name from various possible fields
+        const logName = event.LogName || event.log_name || event.Log || '';
+        const logNameLower = logName.toLowerCase();
+        
+        // Also check ProviderName or Source which might indicate the log type
+        const provider = event.ProviderName || event.provider || '';
+        const providerLower = provider.toLowerCase();
+        
+        // Check for security-related indicators
+        const eventId = event.EventID || event.EventId || event.Id || '';
+        
+        // Security events often have specific Event IDs or providers
+        if (logNameLower.includes('security') || 
+            providerLower.includes('security') ||
+            providerLower.includes('audit') ||
+            (eventId >= 4600 && eventId <= 4699) || // Windows security event range
+            providerLower.includes('microsoft-windows-security-auditing')) {
+            return 'security';
+        }
+        
+        // Application events
+        if (logNameLower.includes('application') || 
+            providerLower.includes('application') ||
+            (!logNameLower.includes('system') && !logNameLower.includes('security'))) {
+            return 'application';
+        }
+        
+        // System events (default)
+        if (logNameLower.includes('system') || 
+            logName === '' || 
+            providerLower.includes('system') ||
+            providerLower.includes('microsoft-windows-kernel')) {
+            return 'system';
+        }
+        
+        // Default to system if can't determine
+        return 'system';
     };
 
     const handleWebSocketMessage = useCallback((data) => {
@@ -226,7 +287,7 @@ const EventViewer = () => {
                 break;
                 
             case 'get_event_viewer_data':
-                console.log('Event Viewer: Processing event viewer data for all marked machines');
+                console.log('Event Viewer: Processing event viewer data');
                 isFetchingRef.current = false;
                 
                 let eventData = null;
@@ -240,57 +301,103 @@ const EventViewer = () => {
                 }
                 
                 if (eventData) {
-                    console.log('Event Viewer: Loaded aggregated event viewer data:', eventData);
+                    console.log('Event Viewer: Loaded event viewer data:', eventData);
                     
+                    // Initialize event arrays
+                    const systemEvents = [];
+                    const applicationEvents = [];
+                    const securityEvents = [];
+                    
+                    // Process events based on data structure
                     if (Array.isArray(eventData)) {
-                        const systemEvents = [];
-                        const applicationEvents = [];
-                        const securityEvents = [];
-                        
+                        // Direct array of events
                         eventData.forEach(event => {
                             const enhancedEvent = {
                                 ...event,
-                                machineName: event.machine_name || 'Unknown',
-                                machineIp: event.machine_ip || 'Unknown'
+                                machineName: event.machine_name || event.machineName || 'Unknown',
+                                machineIp: event.machine_ip || event.machineIp || 'Unknown'
                             };
                             
-                            const logName = event.LogName || event.log_name || '';
-                            if (logName.toLowerCase().includes('system')) {
+                            // Categorize the event
+                            const category = categorizeEvent(event);
+                            
+                            if (category === 'system') {
                                 systemEvents.push(enhancedEvent);
-                            } else if (logName.toLowerCase().includes('application')) {
+                            } else if (category === 'application') {
                                 applicationEvents.push(enhancedEvent);
-                            } else if (logName.toLowerCase().includes('security')) {
+                            } else if (category === 'security') {
                                 securityEvents.push(enhancedEvent);
-                            } else {
-                                systemEvents.push(enhancedEvent);
                             }
                         });
-                        
-                        setEvents({
-                            system: systemEvents,
-                            application: applicationEvents,
-                            security: securityEvents
-                        });
-                    } else if (eventData.system || eventData.application || eventData.security) {
-                        setEvents({
-                            system: eventData.system || [],
-                            application: eventData.application || [],
-                            security: eventData.security || []
-                        });
-                    } else if (eventData.events) {
-                        setEvents({
-                            system: eventData.events.system || [],
-                            application: eventData.events.application || [],
-                            security: eventData.events.security || []
-                        });
-                    } else {
-                        const allEvents = Object.values(eventData).flat().filter(Boolean);
-                        setEvents({
-                            system: allEvents || [],
-                            application: [],
-                            security: []
-                        });
+                    } else if (typeof eventData === 'object') {
+                        // Could be object with categories or machine-based grouping
+                        if (eventData.system || eventData.application || eventData.security) {
+                            // Already categorized
+                            if (eventData.system && Array.isArray(eventData.system)) {
+                                eventData.system.forEach(event => {
+                                    const enhancedEvent = {
+                                        ...event,
+                                        machineName: event.machine_name || event.machineName || 'Unknown',
+                                        machineIp: event.machine_ip || event.machineIp || 'Unknown'
+                                    };
+                                    systemEvents.push(enhancedEvent);
+                                });
+                            }
+                            if (eventData.application && Array.isArray(eventData.application)) {
+                                eventData.application.forEach(event => {
+                                    const enhancedEvent = {
+                                        ...event,
+                                        machineName: event.machine_name || event.machineName || 'Unknown',
+                                        machineIp: event.machine_ip || event.machineIp || 'Unknown'
+                                    };
+                                    applicationEvents.push(enhancedEvent);
+                                });
+                            }
+                            if (eventData.security && Array.isArray(eventData.security)) {
+                                eventData.security.forEach(event => {
+                                    const enhancedEvent = {
+                                        ...event,
+                                        machineName: event.machine_name || event.machineName || 'Unknown',
+                                        machineIp: event.machine_ip || event.machineIp || 'Unknown'
+                                    };
+                                    securityEvents.push(enhancedEvent);
+                                });
+                            }
+                        } else {
+                            // Might be grouped by machine IP or other keys
+                            Object.keys(eventData).forEach(key => {
+                                const eventsList = eventData[key];
+                                if (Array.isArray(eventsList)) {
+                                    eventsList.forEach(event => {
+                                        const enhancedEvent = {
+                                            ...event,
+                                            machineName: event.machine_name || event.machineName || 'Unknown',
+                                            machineIp: event.machine_ip || event.machineIp || 'Unknown'
+                                        };
+                                        
+                                        // Categorize the event
+                                        const category = categorizeEvent(event);
+                                        
+                                        if (category === 'system') {
+                                            systemEvents.push(enhancedEvent);
+                                        } else if (category === 'application') {
+                                            applicationEvents.push(enhancedEvent);
+                                        } else if (category === 'security') {
+                                            securityEvents.push(enhancedEvent);
+                                        }
+                                    });
+                                }
+                            });
+                        }
                     }
+                    
+                    console.log(`Event Viewer: Categorized events - System: ${systemEvents.length}, Application: ${applicationEvents.length}, Security: ${securityEvents.length}`);
+                    
+                    setEvents({
+                        system: systemEvents,
+                        application: applicationEvents,
+                        security: securityEvents
+                    });
                     
                     setLoading(false);
                     setLastUpdated(new Date());
@@ -315,7 +422,46 @@ const EventViewer = () => {
         }
     }, [processMachineInfo]);
 
-    const fetchEventData = useCallback((machines = markedMachines) => {
+    const fetchEventDataForSingleMachine = useCallback((machine) => {
+        if (isFetchingRef.current) {
+            console.log('Event Viewer: Already fetching event data, skipping...');
+            return;
+        }
+
+        if (!isConnected) {
+            console.log('Event Viewer: WebSocket not connected');
+            setError('Not connected to backend system');
+            setLoading(false);
+            return;
+        }
+
+        console.log(`Event Viewer: Fetching events for single machine: ${machine.name} (${machine.ip})`);
+        setLoading(true);
+        setError(null);
+        isFetchingRef.current = true;
+        
+        const payload = createEventViewerPayloadForSingleMachine(machine);
+        if (!payload) {
+            setLoading(false);
+            isFetchingRef.current = false;
+            return;
+        }
+        
+        console.log('Event Viewer: Sending payload (credentials only, no log_name):', payload);
+        sendCommand('get_event_viewer_data', payload);
+
+        timeoutRef.current = setTimeout(() => {
+            if (isFetchingRef.current) {
+                console.log('Event Viewer: Timeout: No response from backend for event data');
+                setError('Timeout: No response from server');
+                setLoading(false);
+                isFetchingRef.current = false;
+                timeoutRef.current = null;
+            }
+        }, 30000);
+    }, [isConnected, sendCommand, createEventViewerPayloadForSingleMachine]);
+
+    const fetchEventDataForAllMachines = useCallback((machines = markedMachines) => {
         if (isFetchingRef.current) {
             console.log('Event Viewer: Already fetching event data, skipping...');
             return;
@@ -335,18 +481,19 @@ const EventViewer = () => {
             return;
         }
 
-        console.log(`Event Viewer: Fetching event viewer data for ${machines.length} marked machine(s)...`);
+        console.log(`Event Viewer: Fetching events for ${machines.length} marked machine(s)...`);
         setLoading(true);
         setError(null);
         isFetchingRef.current = true;
         
-        const payload = createEventViewerPayload(machines);
+        const payload = createEventViewerPayloadForAllMachines(machines);
         if (!payload) {
             setLoading(false);
             isFetchingRef.current = false;
             return;
         }
         
+        console.log('Event Viewer: Sending payload (credentials only, no log_name):', payload);
         sendCommand('get_event_viewer_data', payload);
 
         timeoutRef.current = setTimeout(() => {
@@ -358,7 +505,20 @@ const EventViewer = () => {
                 timeoutRef.current = null;
             }
         }, 30000);
-    }, [isConnected, markedMachines, sendCommand, selectedCategory]);
+    }, [isConnected, markedMachines, sendCommand, createEventViewerPayloadForAllMachines]);
+
+    const handleMachineSelect = useCallback((machineIp) => {
+        setSelectedMachine(machineIp);
+        
+        if (machineIp) {
+            const machine = markedMachines.find(m => m.ip === machineIp);
+            if (machine) {
+                fetchEventDataForSingleMachine(machine);
+            }
+        } else {
+            fetchEventDataForAllMachines();
+        }
+    }, [markedMachines, fetchEventDataForSingleMachine, fetchEventDataForAllMachines]);
 
     const getEventStats = () => {
         return {
@@ -369,7 +529,7 @@ const EventViewer = () => {
         };
     };
 
-    const handleManualRefresh = useCallback(() => {
+    const handleManualRefresh = useCallback((machineIp = null) => {
         if (!isConnected) {
             alert('Cannot refresh: Not connected to backend system');
             return;
@@ -385,20 +545,38 @@ const EventViewer = () => {
             return;
         }
         
-        fetchEventData();
-    }, [isConnected, markedMachines.length, fetchEventData, isFetchingRef]);
+        if (machineIp) {
+            const machine = markedMachines.find(m => m.ip === machineIp);
+            if (machine) {
+                fetchEventDataForSingleMachine(machine);
+            }
+        } else {
+            fetchEventDataForAllMachines();
+        }
+    }, [isConnected, markedMachines.length, fetchEventDataForAllMachines, fetchEventDataForSingleMachine, isFetchingRef]);
+
+    const handleRefreshMachines = () => {
+        fetchMachineInfo();
+    };
 
     useEffect(() => {
         if (autoRefresh && markedMachines.length > 0) {
             const interval = setInterval(() => {
                 if (!isFetchingRef.current) {
-                    fetchEventData();
+                    if (selectedMachine) {
+                        const machine = markedMachines.find(m => m.ip === selectedMachine);
+                        if (machine) {
+                            fetchEventDataForSingleMachine(machine);
+                        }
+                    } else {
+                        fetchEventDataForAllMachines();
+                    }
                 }
             }, 30000);
 
             return () => clearInterval(interval);
         }
-    }, [autoRefresh, fetchEventData, markedMachines]);
+    }, [autoRefresh, fetchEventDataForSingleMachine, fetchEventDataForAllMachines, markedMachines, selectedMachine]);
 
     useEffect(() => {
         if (!machineInfoListenerRef.current) {
@@ -424,19 +602,8 @@ const EventViewer = () => {
         }
     }, [isConnected, fetchMachineInfo, markedMachines.length]);
 
-    useEffect(() => {
-        if (markedMachines.length > 0 && isConnected) {
-            console.log('Event Viewer: Category changed, fetching events for all marked machines...');
-            fetchEventData();
-        }
-    }, [selectedCategory, fetchEventData, isConnected]);
-
     const handleCategoryChange = (category) => {
         setSelectedCategory(category);
-    };
-
-    const handleRefreshMachines = () => {
-        fetchMachineInfo();
     };
 
     const formatDate = (dateString) => {
@@ -570,16 +737,6 @@ const EventViewer = () => {
                                         Last updated: {lastUpdated.toLocaleTimeString()}
                                     </div>
                                 )}
-                                {markedMachines.length > 0 && (
-                                    <div className="selected-machines-info">
-                                        <span className="machines-count">
-                                            Monitoring {markedMachines.length} marked machine(s)
-                                        </span>
-                                        <span className="machines-list">
-                                            {markedMachines.map(m => m.name).join(', ')}
-                                        </span>
-                                    </div>
-                                )}
                             </div>
 
                             <div className="events-controls">
@@ -592,22 +749,12 @@ const EventViewer = () => {
                                 </button>
 
                                 <button
-                                    onClick={handleManualRefresh} 
+                                    onClick={() => handleManualRefresh(selectedMachine)}
                                     className="refresh-button"
                                     disabled={loading || !isConnected || isFetchingRef.current || markedMachines.length === 0}
                                 >
                                     {loading ? 'Refreshing...' : 'Refresh Events'}
                                 </button>
-
-                                <label className="auto-refresh-toggle">
-                                    <input
-                                        type="checkbox"
-                                        checked={autoRefresh}
-                                        onChange={(e) => setAutoRefresh(e.target.checked)}
-                                        disabled={!isConnected || markedMachines.length === 0}
-                                    />
-                                    Auto Refresh 
-                                </label>
                             </div>
                         </div>
 
@@ -622,6 +769,78 @@ const EventViewer = () => {
                                 >
                                     ×
                                 </button>
+                            </div>
+                        )}
+
+                        <div className="machine-select-container">
+                            {machinesLoading ? (
+                                <div className="loading-message">
+                                    <div className="loading-spinner"></div>
+                                    Loading machine information...
+                                </div>
+                            ) : markedMachines.length === 0 ? (
+                                <div className="no-machines-configured">
+                                    <div className="configure-machines-prompt">
+                                        <p>No marked machines found in database.</p>
+                                        <p>Please mark machines as DNS, DHCP, or AD in Machine Management first.</p>
+                                        <button 
+                                            onClick={handleRefreshMachines}
+                                            className="btn-refresh-machines-large"
+                                        >
+                                            Refresh Machine List
+                                        </button>
+                                    </div>
+                                </div>
+                            ) : (
+                                <div className="select-wrapper">
+                                    <select
+                                        value={selectedMachine}
+                                        onChange={(e) => handleMachineSelect(e.target.value)}
+                                        className="machine-select"
+                                    >
+                                        <option value="">Select a machine to view events...</option>
+                                        {markedMachines.map(machine => (
+                                            <option key={machine.id} value={machine.ip}>
+                                                {machine.name} ({machine.ip}) - {getMachineRoles(machine)}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </div>
+                            )}
+                        </div>
+
+                        {selectedMachine && (
+                            <div className="selected-machine-info">
+                                <div className="selected-machine-header">
+                                    <div className="selected-machine-name">
+                                        {markedMachines.find(m => m.ip === selectedMachine)?.name}
+                                    </div>
+                                    <button
+                                        onClick={() => handleManualRefresh(selectedMachine)}
+                                        className="refresh-single-btn"
+                                        disabled={loading}
+                                    >
+                                        {loading ? 'Refreshing...' : '⟳ Refresh'}
+                                    </button>
+                                </div>
+                                <div className="selected-machine-details">
+                                    <div className="machine-detail-item">
+                                        <span className="detail-label">IP Address:</span>
+                                        <span className="detail-value">{selectedMachine}</span>
+                                    </div>
+                                    <div className="machine-detail-item">
+                                        <span className="detail-label">Username:</span>
+                                        <span className="detail-value">
+                                            {markedMachines.find(m => m.ip === selectedMachine)?.username}
+                                        </span>
+                                    </div>
+                                    <div className="machine-detail-item">
+                                        <span className="detail-label">Roles:</span>
+                                        <span className="detail-value">
+                                            {getMachineRoles(markedMachines.find(m => m.ip === selectedMachine))}
+                                        </span>
+                                    </div>
+                                </div>
                             </div>
                         )}
 
@@ -675,11 +894,15 @@ const EventViewer = () => {
                             ) : loading ? (
                                 <div className="loading-message">
                                     <div className="loading-spinner"></div>
-                                    Loading event data from {markedMachines.length} machine(s)...
+                                    Loading event data from {selectedMachine ? 
+                                        `${markedMachines.find(m => m.ip === selectedMachine)?.name}` : 
+                                        `${markedMachines.length} machine(s)`}...
                                 </div>
                             ) : currentEvents.length === 0 ? (
                                 <div className="no-events-message">
-                                    No {selectedCategory} events found on marked machine(s)
+                                    No {selectedCategory} events found {selectedMachine ? 
+                                        `on ${markedMachines.find(m => m.ip === selectedMachine)?.name}` : 
+                                        'on marked machine(s)'}
                                 </div>
                             ) : (
                                 <table className="events-table">
@@ -777,6 +1000,14 @@ const EventViewer = () => {
                                     <span className="machine-stat-label">Marked Machines:</span>
                                     <span className="machine-stat-value">{markedMachines.length}</span>
                                 </div>
+                                {selectedMachine && (
+                                    <div className="machine-stat">
+                                        <span className="machine-stat-label">Selected Machine:</span>
+                                        <span className="machine-stat-value">
+                                            {markedMachines.find(m => m.ip === selectedMachine)?.name}
+                                        </span>
+                                    </div>
+                                )}
                             </div>
                         </div>
 
@@ -785,7 +1016,7 @@ const EventViewer = () => {
                             <div className="action-buttons">
                                 <button
                                     className="action-button"
-                                    onClick={handleManualRefresh}
+                                    onClick={() => handleManualRefresh(selectedMachine)}
                                     disabled={!isConnected || isFetchingRef.current || markedMachines.length === 0}
                                 >
                                     Refresh Events
@@ -816,6 +1047,15 @@ const EventViewer = () => {
                                 >
                                     Copy Current Category
                                 </button>
+                                {selectedMachine && (
+                                    <button
+                                        className="action-button"
+                                        onClick={() => setSelectedMachine('')}
+                                        disabled={!isConnected || isFetchingRef.current}
+                                    >
+                                        View All Machines
+                                    </button>
+                                )}
                             </div>
                         </div>
 
@@ -832,18 +1072,21 @@ const EventViewer = () => {
                                             {markedMachines.length}
                                         </span>
                                     </div>
+                                    {selectedMachine && (
+                                        <div className="status-detail">
+                                            <span className="detail-label">Viewing:</span>
+                                            <span className="detail-value">
+                                                {markedMachines.find(m => m.ip === selectedMachine)?.name}
+                                            </span>
+                                        </div>
+                                    )}
                                     <div className="status-detail">
                                         <span className="detail-label">Last Refresh:</span>
                                         <span className="detail-value">
                                             {lastUpdated ? lastUpdated.toLocaleTimeString() : 'Never'}
                                         </span>
                                     </div>
-                                    <div className="status-detail">
-                                        <span className="detail-label">Auto Refresh:</span>
-                                        <span className="detail-value">
-                                            {autoRefresh ? 'Enabled' : 'Disabled'}
-                                        </span>
-                                    </div>
+                                    
                                     <div className="status-detail">
                                         <span className="detail-label">Status:</span>
                                         <span className="detail-value">
@@ -852,54 +1095,6 @@ const EventViewer = () => {
                                     </div>
                                 </div>
                             )}
-                        </div>
-
-                        <div className="machine-list-card">
-                            <div className="machine-list-header">
-                                <h3 className="machine-list-title">Marked Machines</h3>
-                                <div className="machine-list-actions">
-                                    <span className="selection-count">
-                                        {markedMachines.length} total
-                                    </span>
-                                </div>
-                            </div>
-                            <div className="machine-list">
-                                {markedMachines.length === 0 ? (
-                                    <div className="no-machines">
-                                        <p>No marked machines found</p>
-                                        <button 
-                                            onClick={handleRefreshMachines}
-                                            className="btn-refresh-machines-small"
-                                        >
-                                            Refresh List
-                                        </button>
-                                    </div>
-                                ) : (
-                                    <div className="machine-items">
-                                        {markedMachines.map(machine => (
-                                            <div 
-                                                key={machine.id}
-                                                className="machine-item"
-                                            >
-                                                <div className="machine-item-header">
-                                                    <div className="machine-item-name">{machine.name}</div>
-                                                </div>
-                                                <div className="machine-item-ip">{machine.ip}</div>
-                                                <div className="machine-item-user">{machine.username}</div>
-                                                {machine.marked_as && Array.isArray(machine.marked_as) && machine.marked_as.length > 0 && (
-                                                    <div className="machine-item-roles">
-                                                        {machine.marked_as.map((mark, idx) => (
-                                                            <span key={idx} className={`role-badge ${mark.role}`}>
-                                                                {mark.role} {mark.type}
-                                                            </span>
-                                                        ))}
-                                                    </div>
-                                                )}
-                                            </div>
-                                        ))}
-                                    </div>
-                                )}
-                            </div>
                         </div>
                     </div>
                 </div>
