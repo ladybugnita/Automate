@@ -16,6 +16,8 @@ function ResourceMonitor() {
   const [showMarkModal, setShowMarkModal] = useState(false);
   
   const [resourceData, setResourceData] = useState({});
+  const [selectedMachine, setSelectedMachine] = useState('');
+  const [selectedMachineUsers, setSelectedMachineUsers] = useState([]);
   
   const autoRefreshInterval = useRef(null);
   const isMounted = useRef(true);
@@ -109,6 +111,25 @@ function ResourceMonitor() {
       password: machine.password
     };
   };
+
+  const createResourcePayloadForSingleMachine = useCallback((machine) => {
+    if (!machine) {
+      console.error('ResourceMonitor: No machine selected');
+      setError('No machine selected');
+      return null;
+    }
+    
+    const windowsInfo = getWindowsInfoForMachine(machine);
+    if (!windowsInfo) {
+      return null;
+    }
+    
+    console.log(`ResourceMonitor: Creating payload for single machine: ${machine.name}`);
+    
+    return {
+      windows_info: windowsInfo
+    };
+  }, []);
 
   const createResourcePayloadForAllMachines = useCallback((machines) => {
     if (!machines || machines.length === 0) {
@@ -209,59 +230,88 @@ function ResourceMonitor() {
         
         if (responseData) {
           try {
-            let resourceData = responseData;
+            let resourceDataResult = responseData;
             
             if (responseData.status === 'success' && responseData.data) {
-              resourceData = responseData.data;
+              resourceDataResult = responseData.data;
             }
             
             if (responseData.success !== false && responseData.data) {
-              resourceData = responseData.data;
+              resourceDataResult = responseData.data;
             }
             
-            if (resourceData.machine_ip && markedMachines.length > 0) {
+            if (resourceDataResult.machines && Array.isArray(resourceDataResult.machines)) {
+              const newResourceData = {};
+              resourceDataResult.machines.forEach(machine => {
+                if (machine.ip && machine.data) {
+                  newResourceData[machine.ip] = {
+                    cpu_percent: machine.data.cpu_percent || 0,
+                    total_memory_mb: machine.data.total_memory_mb || 0,
+                    free_memory_mb: machine.data.free_memory_mb || 0,
+                    used_memory_mb: machine.data.used_memory_mb || 0,
+                    top_processes: machine.data.top_processes || [],
+                    disk_usage: machine.data.disk_usage || {
+                      total: 1024 * 1024 * 1024, 
+                      used: 0,
+                      free: 1024 * 1024 * 1024,
+                      percent: 0
+                    },
+                    network_stats: machine.data.network_stats || {
+                      upload: 0,
+                      download: 0,
+                      connections: 0
+                    },
+                    system_uptime: machine.data.system_uptime || "",
+                    machine_name: machine.name || 'Unknown'
+                  };
+                }
+              });
+              setResourceData(newResourceData);
+            } else if (resourceDataResult.machine_ip) {
               setResourceData(prev => ({
                 ...prev,
-                [resourceData.machine_ip]: {
-                  cpu_percent: resourceData.cpu_percent || 0,
-                  total_memory_mb: resourceData.total_memory_mb || 0,
-                  free_memory_mb: resourceData.free_memory_mb || 0,
-                  used_memory_mb: resourceData.used_memory_mb || 0,
-                  top_processes: resourceData.top_processes || [],
-                  disk_usage: resourceData.disk_usage || {
+                [resourceDataResult.machine_ip]: {
+                  cpu_percent: resourceDataResult.cpu_percent || 0,
+                  total_memory_mb: resourceDataResult.total_memory_mb || 0,
+                  free_memory_mb: resourceDataResult.free_memory_mb || 0,
+                  used_memory_mb: resourceDataResult.used_memory_mb || 0,
+                  top_processes: resourceDataResult.top_processes || [],
+                  disk_usage: resourceDataResult.disk_usage || {
                     total: 1024 * 1024 * 1024, 
                     used: 0,
                     free: 1024 * 1024 * 1024,
                     percent: 0
                   },
-                  network_stats: resourceData.network_stats || {
+                  network_stats: resourceDataResult.network_stats || {
                     upload: 0,
                     download: 0,
                     connections: 0
                   },
-                  system_uptime: resourceData.system_uptime || ""
+                  system_uptime: resourceDataResult.system_uptime || "",
+                  machine_name: resourceDataResult.machine_name || 'Unknown'
                 }
               }));
             } else {
               setResourceData({
                 'default': {
-                  cpu_percent: resourceData.cpu_percent || 0,
-                  total_memory_mb: resourceData.total_memory_mb || 0,
-                  free_memory_mb: resourceData.free_memory_mb || 0,
-                  used_memory_mb: resourceData.used_memory_mb || 0,
-                  top_processes: resourceData.top_processes || [],
-                  disk_usage: resourceData.disk_usage || {
+                  cpu_percent: resourceDataResult.cpu_percent || 0,
+                  total_memory_mb: resourceDataResult.total_memory_mb || 0,
+                  free_memory_mb: resourceDataResult.free_memory_mb || 0,
+                  used_memory_mb: resourceDataResult.used_memory_mb || 0,
+                  top_processes: resourceDataResult.top_processes || [],
+                  disk_usage: resourceDataResult.disk_usage || {
                     total: 1024 * 1024 * 1024, 
                     used: 0,
                     free: 1024 * 1024 * 1024,
                     percent: 0
                   },
-                  network_stats: resourceData.network_stats || {
+                  network_stats: resourceDataResult.network_stats || {
                     upload: 0,
                     download: 0,
                     connections: 0
                   },
-                  system_uptime: resourceData.system_uptime || ""
+                  system_uptime: resourceDataResult.system_uptime || "",
+                  machine_name: 'Default Machine'
                 }
               });
             }
@@ -287,7 +337,47 @@ function ResourceMonitor() {
       default:
         console.log(`ResourceMonitor: Unhandled command: ${command}`);
     }
-  }, [processMachineInfo, markedMachines]);
+  }, [processMachineInfo]);
+
+  const fetchResourceDataForSingleMachine = useCallback((machine) => {
+    if (isFetchingRef.current) {
+      console.log('ResourceMonitor: Already fetching resource data, skipping...');
+      return;
+    }
+
+    if (!isConnected) {
+      console.log('ResourceMonitor: WebSocket not connected');
+      setError('Not connected to backend system');
+      return;
+    }
+
+    console.log(`ResourceMonitor: Fetching resource data for single machine: ${machine.name} (${machine.ip})`);
+    setLoading(true);
+    setError(null);
+    isFetchingRef.current = true;
+    
+    const payload = createResourcePayloadForSingleMachine(machine);
+    if (!payload) {
+      setLoading(false);
+      isFetchingRef.current = false;
+      return;
+    }
+    
+    console.log('ResourceMonitor: Sending get_resource_monitor_data command for single machine');
+    console.log('Payload being sent (single machine):', payload);
+    
+    sendCommand('get_resource_monitor_data', payload);
+    
+    timeoutRef.current = setTimeout(() => {
+      if (isFetchingRef.current) {
+        console.log('ResourceMonitor: Timeout: No response from backend');
+        setError('Timeout: No response from server');
+        setLoading(false);
+        isFetchingRef.current = false;
+        timeoutRef.current = null;
+      }
+    }, 20000);
+  }, [isConnected, sendCommand, createResourcePayloadForSingleMachine]);
 
   const fetchResourceDataForAllMachines = useCallback((machines = markedMachines) => {
     if (isFetchingRef.current) {
@@ -320,6 +410,8 @@ function ResourceMonitor() {
     }
     
     console.log('ResourceMonitor: Sending get_resource_monitor_data command with payload for all machines');
+    console.log('Payload being sent (all machines):', payload);
+    
     sendCommand('get_resource_monitor_data', payload);
     
     timeoutRef.current = setTimeout(() => {
@@ -333,7 +425,20 @@ function ResourceMonitor() {
     }, 20000);
   }, [isConnected, markedMachines, sendCommand, createResourcePayloadForAllMachines]);
 
-  const handleRefresh = useCallback(() => {
+  const handleMachineSelect = useCallback((machineIp) => {
+    setSelectedMachine(machineIp);
+    
+    if (machineIp) {
+      const machine = markedMachines.find(m => m.ip === machineIp);
+      if (machine) {
+        fetchResourceDataForSingleMachine(machine);
+      }
+    } else {
+      fetchResourceDataForAllMachines();
+    }
+  }, [markedMachines, fetchResourceDataForSingleMachine, fetchResourceDataForAllMachines]);
+
+  const handleRefresh = useCallback((machineIp = null) => {
     if (!isConnected) {
       alert('Cannot refresh: Not connected to backend system');
       return;
@@ -349,8 +454,15 @@ function ResourceMonitor() {
       return;
     }
     
-    fetchResourceDataForAllMachines();
-  }, [isConnected, markedMachines.length, fetchResourceDataForAllMachines, isFetchingRef.current]);
+    if (machineIp) {
+      const machine = markedMachines.find(m => m.ip === machineIp);
+      if (machine) {
+        fetchResourceDataForSingleMachine(machine);
+      }
+    } else {
+      fetchResourceDataForAllMachines();
+    }
+  }, [isConnected, markedMachines.length, fetchResourceDataForAllMachines, fetchResourceDataForSingleMachine, isFetchingRef]);
 
   const handleRefreshMachines = () => {
     console.log('ResourceMonitor: Refreshing machine list');
@@ -377,7 +489,14 @@ function ResourceMonitor() {
         
         autoRefreshInterval.current = setInterval(() => {
           if (isMounted.current && isConnected && markedMachines.length > 0) {
-            fetchResourceDataForAllMachines();
+            if (selectedMachine) {
+              const machine = markedMachines.find(m => m.ip === selectedMachine);
+              if (machine) {
+                fetchResourceDataForSingleMachine(machine);
+              }
+            } else {
+              fetchResourceDataForAllMachines();
+            }
           }
         }, 5000);
       } else {
@@ -397,7 +516,7 @@ function ResourceMonitor() {
         autoRefreshInterval.current = null;
       }
     };
-  }, [autoRefresh, isConnected, markedMachines.length]);
+  }, [autoRefresh, isConnected, markedMachines.length, selectedMachine]);
 
   useEffect(() => {
     if (!machineInfoListenerRef.current) {
@@ -461,8 +580,29 @@ function ResourceMonitor() {
     return (machineData.used_memory_mb / machineData.total_memory_mb) * 100;
   };
 
-  const getResourceData = (machineIp = 'default') => {
-    return resourceData[machineIp] || {
+  const getResourceData = (machineIp = selectedMachine) => {
+    if (machineIp && resourceData[machineIp]) {
+      return resourceData[machineIp];
+    }
+    
+    if (markedMachines.length > 0) {
+      const firstMachineIp = markedMachines[0].ip;
+      return resourceData[firstMachineIp] || {
+        cpu_percent: 0,
+        total_memory_mb: 0,
+        free_memory_mb: 0,
+        used_memory_mb: 0,
+        top_processes: [],
+        disk_usage: { total: 0, used: 0, free: 0, percent: 0 },
+        network_stats: { upload: 0, download: 0, connections: 0 },
+        system_uptime: "",
+        machine_name: selectedMachine ? 
+          markedMachines.find(m => m.ip === selectedMachine)?.name || 'Unknown' : 
+          'All Machines'
+      };
+    }
+    
+    return {
       cpu_percent: 0,
       total_memory_mb: 0,
       free_memory_mb: 0,
@@ -470,13 +610,18 @@ function ResourceMonitor() {
       top_processes: [],
       disk_usage: { total: 0, used: 0, free: 0, percent: 0 },
       network_stats: { upload: 0, download: 0, connections: 0 },
-      system_uptime: ""
+      system_uptime: "",
+      machine_name: 'No Machine Selected'
     };
   };
 
   const getMachineRoles = (machine) => {
     if (!machine.marked_as || !Array.isArray(machine.marked_as)) return [];
     return machine.marked_as.map(mark => `${mark.role} ${mark.type}`).join(', ');
+  };
+
+  const formatLastRefresh = () => {
+    return lastUpdated || 'Never';
   };
 
   const MarkMachineModal = () => {
@@ -502,7 +647,7 @@ function ResourceMonitor() {
                 </div>
                 <div className="modal-stat-item">
                   <div className="modal-stat-label">LAST REFRESH</div>
-                  <div className="modal-stat-value">{lastUpdated || 'Never'}</div>
+                  <div className="modal-stat-value">{formatLastRefresh()}</div>
                 </div>
                 <div className="modal-stat-item">
                   <button 
@@ -549,68 +694,76 @@ function ResourceMonitor() {
   };
 
   const MachineSelector = () => {
-    if (markedMachines.length <= 1) return null;
-
-    return (
-      <div className="machine-selector">
-        <label className="machine-selector-label">Select Machine:</label>
-        <select className="machine-selector-dropdown">
-          <option value="all">All Machines Overview</option>
-          {markedMachines.map(machine => (
-            <option key={machine.id} value={machine.ip}>
-              {machine.name} ({machine.ip})
-            </option>
-          ))}
-        </select>
-      </div>
-    );
-  };
-
-  const MachineOverview = () => {
-    if (markedMachines.length === 0) return null;
-
-    return (
-      <div className="machine-overview-section">
-        <h3>Marked Machines ({markedMachines.length})</h3>
-        <div className="machine-overview-grid">
-          {markedMachines.map(machine => {
-            const machineData = getResourceData(machine.ip);
-            return (
-              <div key={machine.id} className="machine-overview-card">
-                <div className="machine-overview-header">
-                  <div className="machine-overview-name">{machine.name}</div>
-                  <div className="machine-overview-ip">{machine.ip}</div>
-                </div>
-                <div className="machine-overview-stats">
-                  <div className="machine-stat">
-                    <span className="machine-stat-label">CPU:</span>
-                    <span className="machine-stat-value">{machineData.cpu_percent.toFixed(1)}%</span>
-                  </div>
-                  <div className="machine-stat">
-                    <span className="machine-stat-label">Memory:</span>
-                    <span className="machine-stat-value">{calculateMemoryPercentage(machineData).toFixed(1)}%</span>
-                  </div>
-                  <div className="machine-stat">
-                    <span className="machine-stat-label">Disk:</span>
-                    <span className="machine-stat-value">{machineData.disk_usage.percent.toFixed(1)}%</span>
-                  </div>
-                </div>
-              </div>
-            );
-          })}
+    if (machinesLoading) {
+      return (
+        <div className="loading-message">
+          <div className="loading-spinner"></div>
+          Loading machine information...
         </div>
+      );
+    }
+
+    if (markedMachines.length === 0) {
+      return null;
+    }
+
+    return (
+      <div className="machine-select-container">
+        <div className="select-wrapper">
+          <select
+            value={selectedMachine}
+            onChange={(e) => handleMachineSelect(e.target.value)}
+            className="machine-select"
+            disabled={loading || !isConnected || isFetchingRef.current}
+          >
+            <option value="">All Machines Overview</option>
+            {markedMachines.map(machine => (
+              <option key={machine.id} value={machine.ip}>
+                {machine.name} ({machine.ip}) - {getMachineRoles(machine)}
+              </option>
+            ))}
+          </select>
+        </div>
+        
+        {selectedMachine && (
+          <div className="selected-machine-info">
+            <div className="selected-machine-header">
+              <div className="selected-machine-name">
+                {markedMachines.find(m => m.ip === selectedMachine)?.name}
+              </div>
+              <button
+                onClick={() => handleRefresh(selectedMachine)}
+                className="refresh-single-btn"
+                disabled={loading}
+              >
+                {loading ? 'Refreshing...' : '⟳ Refresh'}
+              </button>
+            </div>
+            <div className="selected-machine-details">
+              <div className="machine-detail-item">
+                <span className="detail-label">IP Address:</span>
+                <span className="detail-value">{selectedMachine}</span>
+              </div>
+              <div className="machine-detail-item">
+                <span className="detail-label">Username:</span>
+                <span className="detail-value">
+                  {markedMachines.find(m => m.ip === selectedMachine)?.username}
+                </span>
+              </div>
+              <div className="machine-detail-item">
+                <span className="detail-label">Roles:</span>
+                <span className="detail-value">
+                  {getMachineRoles(markedMachines.find(m => m.ip === selectedMachine))}
+                </span>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   };
 
-  const getCurrentMachineData = () => {
-    if (markedMachines.length > 0) {
-      return getResourceData(markedMachines[0].ip);
-    }
-    return getResourceData();
-  };
-
-  const currentData = getCurrentMachineData();
+  const currentData = getResourceData();
 
   return (
     <div className="resource-monitor">
@@ -646,7 +799,7 @@ function ResourceMonitor() {
                     {machinesLoading ? 'Loading...' : 'Refresh Machines'}
                   </button>
                   <button
-                    onClick={handleRefresh}
+                    onClick={() => handleRefresh()}
                     className="refresh-button"
                     disabled={loading || !isConnected || isFetchingRef.current || markedMachines.length === 0}
                   >
@@ -656,7 +809,18 @@ function ResourceMonitor() {
               </div>
             </div>
 
-            <MachineOverview />
+            <div className="machine-list-card">
+              <div className="machine-list-header">
+                <h3 className="section-title">
+                  Select Machine ({markedMachines.length})
+                </h3>
+                <div className="machine-list-status">
+                  {isConnected ? 'Connected' : 'Disconnected'}
+                </div>
+              </div>
+              
+              <MachineSelector />
+            </div>
           </div>
 
           <div className="users-right-column">
@@ -704,7 +868,6 @@ function ResourceMonitor() {
                 ) : (
                   <>
                     <div className="monitor-controls">
-                      <MachineSelector />
                       <div className="header-actions">
                         <div className="auto-refresh-control">
                           <label className="toggle-label">
@@ -714,7 +877,7 @@ function ResourceMonitor() {
                                 type="checkbox" 
                                 checked={autoRefresh}
                                 onChange={handleAutoRefreshToggle}
-                                disabled={markedMachines.length === 0}
+                                disabled={markedMachines.length === 0 || loading}
                               />
                               <span className="toggle-slider"></span>
                             </div>
@@ -726,6 +889,20 @@ function ResourceMonitor() {
                           </div>
                         )}
                       </div>
+                    </div>
+
+                    <div className="current-machine-info">
+                      <h3>
+                        {selectedMachine ? 
+                          `Monitoring: ${currentData.machine_name || markedMachines.find(m => m.ip === selectedMachine)?.name}` :
+                          'Monitoring All Machines'
+                        }
+                      </h3>
+                      {selectedMachine && (
+                        <div className="machine-ip-display">
+                          IP: {selectedMachine}
+                        </div>
+                      )}
                     </div>
 
                     {activeSection === 'overview' && (
