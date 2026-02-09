@@ -1,36 +1,115 @@
-import React, { useEffect, useState, useCallback, useRef } from 'react';
+import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { useWebSocket } from '../../context/WebSocketContext';
+import { Eye, EyeOff, RefreshCw, Plus, Trash2, Wifi, WifiOff, AlertCircle } from 'lucide-react';
 import './Switch.css';
 
 const Switch = () => {
   const { isConnected, sendCommand, addListener } = useWebSocket();
-  const [markedMachines, setMarkedMachines] = useState([]);
-  const [machinesLoading, setMachinesLoading] = useState(true);
-  const [showMarkModal, setShowMarkModal] = useState(false);
   const [error, setError] = useState(null);
   const [successMessage, setSuccessMessage] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [activeTab, setActiveTab] = useState('vlan'); 
-
-  const [vlanConfig, setVlanConfig] = useState({
-    vlanId: '',
-    vlanName: ''
-  });
-
+  const [activeTab, setActiveTab] = useState('vlan');
+  const [showPassword, setShowPassword] = useState(false);
+  
+  const [allDevices, setAllDevices] = useState([]);
+  const [selectedDevice, setSelectedDevice] = useState('');
+  const [selectedDeviceData, setSelectedDeviceData] = useState(null);
+  const [devicesLoading, setDevicesLoading] = useState(true);
+  const [showNoDevicesModal, setShowNoDevicesModal] = useState(false);
+  const [lastRefresh, setLastRefresh] = useState(null);
+  const [showSelectMessage, setShowSelectMessage] = useState(true);
+  
+  const [deviceStatus, setDeviceStatus] = useState(null); 
+  const [showDeviceDownModal, setShowDeviceDownModal] = useState(false);
+  const [deviceStatusLoading, setDeviceStatusLoading] = useState(false);
+  
+  const [vlans, setVlans] = useState([{ id: '', name: '' }]); 
+  const [vlanDetails, setVlanDetails] = useState(null);
+  const [vlanDetailsLoading, setVlanDetailsLoading] = useState(false);
+  
   const [vtpConfig, setVtpConfig] = useState({
     domainName: '',
     password: '',
     mode: 'server'
   });
 
+  const [ports, setPorts] = useState([{ interfaceName: '', mode: 'access', vlanId: '' }]);
+
   const isFetchingRef = useRef(false);
-  const machineInfoListenerRef = useRef(false);
+  const webSocketListenerRef = useRef(false);
+  const timeoutRef = useRef(null);
+  const mountedRef = useRef(false);
+  const fetchInProgressRef = useRef(false);
+  
+  const commandInProgressRef = useRef(false);
+  const pendingCommandsRef = useRef([]);
+  const lastDeviceFetchTimeRef = useRef(0);
+  const lastVlanFetchTimeRef = useRef(0);
+  const commandCooldownTime = 1000; 
 
   const navItems = [
-    'Dashboard', 'DNS Configuration','Event Viewer', 'DHCP', 'Users',
+    'Dashboard', 'DNS Configuration', 'Event Viewer', 'DHCP', 'Users',
     'Resource Monitor', 'ESXi', 'Switch', 'Machine Management',
     'Active Directory', 'Routing'
   ];
+
+  const API_BASE_URL = useMemo(() => {
+    if (typeof window !== 'undefined') {
+      const currentHost = window.location.hostname;
+      const currentPort = window.location.port;
+      
+      if (currentHost === 'localhost' || currentHost === '127.0.0.1') {
+        return `http://${currentHost}:5000`;
+      } else {
+        return `http://${currentHost}:5000`;
+      }
+    }
+    return 'http://localhost:5000';
+  }, []);
+
+  const sendCommandWithFlow = useCallback((command, payload = null) => {
+    const now = Date.now();
+    
+    if (command === 'get_network_devices') {
+      const timeSinceLastFetch = now - lastDeviceFetchTimeRef.current;
+      if (timeSinceLastFetch < commandCooldownTime) {
+        console.log(`Switch: Skipping duplicate ${command} command (cooldown: ${commandCooldownTime - timeSinceLastFetch}ms remaining)`);
+        return;
+      }
+      lastDeviceFetchTimeRef.current = now;
+    }
+    
+    if (commandInProgressRef.current) {
+      console.log(`Switch: Command ${command} is already in progress, queueing...`);
+      pendingCommandsRef.current.push({ command, payload });
+      return;
+    }
+    
+    commandInProgressRef.current = true;
+    
+    console.log(`Switch: SENDING COMMAND: ${command}`, payload ? 'with payload' : 'no payload');
+    
+    sendCommand(command, payload);
+    
+    setTimeout(() => {
+      commandInProgressRef.current = false;
+      
+      if (pendingCommandsRef.current.length > 0) {
+        const nextCommand = pendingCommandsRef.current.shift();
+        console.log(`Switch: Processing queued command: ${nextCommand.command}`);
+        sendCommandWithFlow(nextCommand.command, nextCommand.payload);
+      }
+    }, 500); 
+  }, [sendCommand]);
+
+  const processNextCommand = useCallback(() => {
+    if (pendingCommandsRef.current.length > 0 && !commandInProgressRef.current) {
+      const nextCommand = pendingCommandsRef.current.shift();
+      console.log(`Switch: Processing queued command: ${nextCommand.command}`);
+      sendCommandWithFlow(nextCommand.command, nextCommand.payload);
+    }
+  }, [sendCommandWithFlow]);
+
 
   const extractResult = (responseData) => {
     if (!responseData) return null;
@@ -46,41 +125,449 @@ const Switch = () => {
     return responseData;
   };
 
-  const fetchMachineInfo = useCallback(() => {
-    console.log('Switch: Fetching ALL machines from database...');
-    setMachinesLoading(true);
+  const validateDeviceSelection = useCallback(() => {
+    if (!selectedDeviceData) {
+      setError('Please select a device first');
+      return false;
+    }
+
+    const password = selectedDeviceData.ssh_password || selectedDeviceData.password || '';
+    const username = selectedDeviceData.ssh_username || selectedDeviceData.username || '';
+    const ip = selectedDeviceData.ip || selectedDeviceData.device_ip || '';
+
+    if (!ip) {
+      setError('Selected device has no IP address');
+      return false;
+    }
+
+    if (!username) {
+      setError('Selected device has no username. Please edit the device to add credentials.');
+      return false;
+    }
+
+    if (!password) {
+      setError('Selected device has no password. Please edit the device to add credentials.');
+      return false;
+    }
+
+    return true;
+  }, [selectedDeviceData]);
+
+  const getDeviceInfo = useCallback(() => {
+    if (!selectedDeviceData) {
+      console.error('Switch: No device selected');
+      return null;
+    }
+    
+    console.log(`Switch: Getting device info: ${selectedDeviceData.name || 'Unknown'} (${selectedDeviceData.ip || selectedDeviceData.device_ip})`);
+    
+    const password = selectedDeviceData.ssh_password || selectedDeviceData.password || '';
+    const username = selectedDeviceData.ssh_username || selectedDeviceData.username || '';
+    const ip = selectedDeviceData.ip || selectedDeviceData.device_ip || '';
+    
+    console.log(`Switch: Credentials for selected device:`, {
+      ip,
+      username,
+      password: password ? '***HIDDEN***' : 'NOT FOUND'
+    });
+    
+    if (!password) {
+      console.error('Switch: No password found for selected device');
+      setError(`No password found for device: ${selectedDeviceData.name || ip}. Please edit the device to add credentials.`);
+      return null;
+    }
+    
+    if (!username) {
+      console.error('Switch: No username found for selected device');
+      setError(`No username found for device: ${selectedDeviceData.name || ip}. Please edit the device to add credentials.`);
+      return null;
+    }
+    
+    if (!ip) {
+      console.error('Switch: No IP found for selected device');
+      setError(`No IP address found for device: ${selectedDeviceData.name || 'selected device'}.`);
+      return null;
+    }
+    
+    return {
+      ip: ip,
+      username: username,
+      password: password
+    };
+  }, [selectedDeviceData]);
+
+  const checkDeviceStatus = useCallback((deviceData = null) => {
+    const deviceToCheck = deviceData || selectedDeviceData;
+    
+    if (!deviceToCheck) {
+      console.error('Switch: No device selected for status check');
+      return;
+    }
+    
+    if (!isConnected) {
+      console.error('Switch: Not connected to backend for status check');
+      setDeviceStatus('error');
+      return;
+    }
+    
+    setDeviceStatusLoading(true);
+    setDeviceStatus('checking');
+    
+    const password = deviceToCheck.ssh_password || deviceToCheck.password || '';
+    const username = deviceToCheck.ssh_username || deviceToCheck.username || '';
+    const ip = deviceToCheck.ip || deviceToCheck.device_ip || '';
+    
+    if (!ip || !username || !password) {
+      console.error('Switch: Incomplete device data for status check');
+      setDeviceStatusLoading(false);
+      setDeviceStatus('error');
+      return;
+    }
+    
+    const deviceInfo = {
+      ip: ip,
+      username: username,
+      password: password
+    };
+    
+    // UPDATED: Changed from device_info to network_device_info
+    const payload = {
+      network_device_info: deviceInfo
+    };
+    
+    console.log('Switch: Checking device status with payload:', {
+      ...payload,
+      network_device_info: { ...payload.network_device_info, password: '***HIDDEN***' }
+    });
+    
+    sendCommandWithFlow('check_network_device_validation', payload);
+  }, [isConnected, selectedDeviceData, sendCommandWithFlow]);
+
+  const addVlan = () => {
+    if (vlans.length < 10) { 
+      setVlans([...vlans, { id: '', name: '' }]);
+    }
+  };
+
+  const removeVlan = (index) => {
+    if (vlans.length > 1) {
+      const newVlans = [...vlans];
+      newVlans.splice(index, 1);
+      setVlans(newVlans);
+    }
+  };
+
+  const updateVlan = (index, field, value) => {
+    const newVlans = [...vlans];
+    newVlans[index][field] = value;
+    setVlans(newVlans);
+  };
+
+  const validateVlans = () => {
+    for (let i = 0; i < vlans.length; i++) {
+      const vlan = vlans[i];
+      
+      if (!vlan.id.trim()) {
+        setError(`VLAN ID is required for VLAN #${i + 1}`);
+        return false;
+      }
+      
+      if (!/^\d+$/.test(vlan.id.trim())) {
+        setError(`VLAN ID must be a number for VLAN #${i + 1}`);
+        return false;
+      }
+      
+      const vlanIdNum = parseInt(vlan.id.trim());
+      if (vlanIdNum < 1 || vlanIdNum > 4094) {
+        setError(`VLAN ID must be between 1 and 4094 for VLAN #${i + 1}`);
+        return false;
+      }
+      
+      if (!vlan.name.trim()) {
+        setError(`VLAN Name is required for VLAN #${i + 1}`);
+        return false;
+      }
+      
+      if (vlan.name.trim().length < 2) {
+        setError(`VLAN Name must be at least 2 characters for VLAN #${i + 1}`);
+        return false;
+      }
+    }
+    
+    const vlanIds = vlans.map(v => v.id.trim());
+    const uniqueIds = new Set(vlanIds);
+    if (uniqueIds.size !== vlanIds.length) {
+      setError('Duplicate VLAN IDs are not allowed');
+      return false;
+    }
+    
+    return true;
+  };
+
+  // Port Configuration Functions
+  const addPort = () => {
+    if (ports.length < 10) { 
+      setPorts([...ports, { interfaceName: '', mode: 'access', vlanId: '' }]);
+    }
+  };
+
+  const removePort = (index) => {
+    if (ports.length > 1) {
+      const newPorts = [...ports];
+      newPorts.splice(index, 1);
+      setPorts(newPorts);
+    }
+  };
+
+  const updatePort = (index, field, value) => {
+    const newPorts = [...ports];
+    newPorts[index][field] = value;
+    
+    // If mode is changed to trunk, clear the VLAN ID
+    if (field === 'mode' && value === 'trunk') {
+      newPorts[index].vlanId = '';
+    }
+    
+    setPorts(newPorts);
+  };
+
+  const validatePorts = () => {
+    for (let i = 0; i < ports.length; i++) {
+      const port = ports[i];
+      
+      if (!port.interfaceName.trim()) {
+        setError(`Interface name is required for Port #${i + 1}`);
+        return false;
+      }
+      
+      // Validate interface name format (e.g., GigabitEthernet0/1, FastEthernet0/1, etc.)
+      if (!/^[a-zA-Z]+[0-9]+\/[0-9]+$/.test(port.interfaceName.trim())) {
+        setError(`Invalid interface name format for Port #${i + 1}. Use format like: GigabitEthernet0/1`);
+        return false;
+      }
+      
+      if (!port.mode) {
+        setError(`Mode is required for Port #${i + 1}`);
+        return false;
+      }
+      
+      if (port.mode === 'access') {
+        if (!port.vlanId.trim()) {
+          setError(`VLAN ID is required for access mode in Port #${i + 1}`);
+          return false;
+        }
+        
+        if (!/^\d+$/.test(port.vlanId.trim())) {
+          setError(`VLAN ID must be a number for Port #${i + 1}`);
+          return false;
+        }
+        
+        const vlanIdNum = parseInt(port.vlanId.trim());
+        if (vlanIdNum < 1 || vlanIdNum > 4094) {
+          setError(`VLAN ID must be between 1 and 4094 for Port #${i + 1}`);
+          return false;
+        }
+      }
+    }
+    
+    return true;
+  };
+
+  const fetchDevices = useCallback(async () => {
+    if (fetchInProgressRef.current || !mountedRef.current) {
+      console.log('Switch: Fetch already in progress or component unmounted');
+      return;
+    }
+    
+    fetchInProgressRef.current = true;
+    console.log('Switch: Fetching devices from Node.js REST API...');
+    setDevicesLoading(true);
     setError(null);
     
-    sendCommand('get_machine_info', {});
-  }, [sendCommand]);
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) {
+        throw new Error('No authentication token found');
+      }
+      
+      const response = await fetch(`${API_BASE_URL}/api/network-devices/get-network-devices?include_password=true`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      
+      if (!response.ok) {
+        throw new Error(`Failed to fetch devices: ${response.status} ${response.statusText}`);
+      }
+      
+      const data = await response.json();
+      
+      let devices = [];
+      if (data.devices && Array.isArray(data.devices)) {
+        devices = data.devices;
+      } else if (data.network_devices && Array.isArray(data.network_devices)) {
+        devices = data.network_devices;
+      } else if (Array.isArray(data)) {
+        devices = data;
+      }
+      
+      console.log(`Switch: Found ${devices.length} devices`);
+      
+      setAllDevices(devices);
+      setDevicesLoading(false);
+      
+      if (devices.length === 0) {
+        console.log('Switch: No devices found in database');
+        setShowNoDevicesModal(true);
+      } else {
+        console.log('Switch: Devices loaded successfully');
+        setShowSelectMessage(true);
+      }
+      
+    } catch (err) {
+      console.error('Switch: REST API failed:', err);
+      if (mountedRef.current) {
+        setError(`Failed to fetch devices: ${err.message}`);
+        setDevicesLoading(false);
+      }
+    } finally {
+      fetchInProgressRef.current = false;
+    }
+  }, [API_BASE_URL]);
 
-  const processMachineInfo = useCallback((machines) => {
-    console.log('Switch: Processing ALL machines info:', machines);
+  const createDevicePayload = useCallback(() => {
+    const deviceInfo = getDeviceInfo();
+    if (!deviceInfo) {
+      return null;
+    }
     
-    if (!machines || !Array.isArray(machines)) {
-      console.error('Switch: Invalid machine data received:', machines);
-      setError('Invalid machine data received from server');
-      setMachinesLoading(false);
+    console.log(`Switch: Creating payload for device: ${selectedDeviceData.name || selectedDeviceData.device_name}`);
+    
+    return {
+      network_device_info: deviceInfo
+    };
+  }, [getDeviceInfo, selectedDeviceData]);
+
+  const createVlanPayload = useCallback(() => {
+    const basePayload = createDevicePayload();
+    if (!basePayload) {
+      return null;
+    }
+    
+    const payload = { ...basePayload };
+    
+    vlans.forEach((vlan, index) => {
+      if (vlan.id.trim() && vlan.name.trim()) {
+        payload[`vlan${index + 1}`] = {
+          id: parseInt(vlan.id.trim()),
+          name: vlan.name.trim()
+        };
+      }
+    });
+    
+    return payload;
+  }, [createDevicePayload, vlans]);
+
+  // Create Port Configuration Payload
+  const createPortPayload = useCallback(() => {
+    const basePayload = createDevicePayload();
+    if (!basePayload) {
+      return null;
+    }
+    
+    const payload = { ...basePayload };
+    
+    ports.forEach((port, index) => {
+      if (port.interfaceName.trim() && port.mode) {
+        const portConfig = {
+          interface_name: port.interfaceName.trim(),
+          mode: port.mode
+        };
+        
+        if (port.mode === 'access' && port.vlanId.trim()) {
+          portConfig.vlan_id = parseInt(port.vlanId.trim());
+        }
+        
+        payload[`port${index + 1}`] = portConfig;
+      }
+    });
+    
+    return payload;
+  }, [createDevicePayload, ports]);
+
+  const fetchVlanDetailsForDevice = useCallback((device) => {
+    if (!device) {
+      console.error('Switch: No device provided to fetchVlanDetailsForDevice');
+      return;
+    }
+    
+    if (isFetchingRef.current) {
+      console.log('Switch: Already fetching VLAN details, skipping...');
       return;
     }
 
-    const markedMachinesList = machines.filter(machine => {
-      return machine.marked_as && 
-             Array.isArray(machine.marked_as) && 
-             machine.marked_as.length > 0;
-    });
-
-    console.log(`Switch: Found ${markedMachinesList.length} marked machines:`, markedMachinesList);
-    setMarkedMachines(markedMachinesList);
-    
-    setMachinesLoading(false);
-    
-    if (markedMachinesList.length === 0) {
-      setShowMarkModal(true);
+    if (!isConnected) {
+      console.error('Switch: Not connected to backend for VLAN details');
+      setError('Not connected to backend system');
+      return;
     }
-  }, []);
+
+    console.log(`Switch: Fetching VLAN details for device: ${device.name || 'Unknown'} (${device.ip || device.device_ip})`);
+    setVlanDetailsLoading(true);
+    setError(null);
+    isFetchingRef.current = true;
+    
+    const password = device.ssh_password || device.password || '';
+    const username = device.ssh_username || device.username || '';
+    const ip = device.ip || device.device_ip || '';
+    
+    if (!ip || !username || !password) {
+      console.error('Switch: Incomplete device data for VLAN details fetch');
+      setError(`Incomplete credentials for device: ${device.name || ip}. Please edit the device to add complete credentials.`);
+      setVlanDetailsLoading(false);
+      isFetchingRef.current = false;
+      return;
+    }
+    
+    const deviceInfo = {
+      ip: ip,
+      username: username,
+      password: password
+    };
+    
+    // UPDATED: Changed from device_info to network_device_info
+    const payload = {
+      network_device_info: deviceInfo
+    };
+    
+    console.log('Switch: Sending get_vlan_details_switch command with payload:', {
+      ...payload,
+      network_device_info: { ...payload.network_device_info, password: '***HIDDEN***' }
+    });
+    
+    sendCommandWithFlow('get_vlan_details_switch', payload);
+    
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+    }
+    
+    timeoutRef.current = setTimeout(() => {
+      if (isFetchingRef.current && mountedRef.current) {
+        console.log('Switch: Timeout: No response from backend for VLAN details');
+        setError('Timeout: No response from server for VLAN details');
+        setVlanDetailsLoading(false);
+        isFetchingRef.current = false;
+        timeoutRef.current = null;
+      }
+    }, 30000); 
+    
+  }, [isConnected, sendCommandWithFlow]);
 
   const handleWebSocketMessage = useCallback((data) => {
+    if (!mountedRef.current) return;
+    
     console.log('Switch WebSocket message:', data);
     
     let command, result, error, payload;
@@ -120,9 +607,28 @@ const Switch = () => {
     
     if (error) {
       console.log(`Switch: Error from backend for command ${command}:`, error);
-      setError(`Error: ${error}`);
-      setLoading(false);
-      setMachinesLoading(false);
+      
+      if (command === 'check_network_device_validation') {
+        setDeviceStatus('down');
+        setDeviceStatusLoading(false);
+        setShowDeviceDownModal(true);
+      } else if (command === 'get_vlan_details_switch') {
+        setVlanDetailsLoading(false);
+        isFetchingRef.current = false;
+        if (timeoutRef.current) {
+          clearTimeout(timeoutRef.current);
+          timeoutRef.current = null;
+        }
+        console.log(`Switch: Error fetching VLAN details: ${error}`);
+        setVlanDetails(null);
+      } else {
+        setError(`Error: ${error}`);
+        setLoading(false);
+        setDevicesLoading(false);
+      }
+      
+      commandInProgressRef.current = false;
+      processNextCommand();
       return;
     }
     
@@ -130,42 +636,137 @@ const Switch = () => {
     console.log('Switch: Extracted response data:', responseData);
     
     switch(command) {
-      case 'get_machine_info':
-        console.log('Switch: Received machine info');
-        if (responseData && responseData.machines) {
-          processMachineInfo(responseData.machines);
-        } else if (responseData && responseData.success === false) {
-          setError(responseData.error || 'Failed to fetch machine info');
-          setMachinesLoading(false);
+      case 'get_network_devices':
+        console.log('Switch: Processing network devices response');
+        if (responseData && responseData.success !== false) {
+          let devices = [];
+          if (responseData.devices && Array.isArray(responseData.devices)) {
+            devices = responseData.devices;
+          } else if (responseData.network_devices && Array.isArray(responseData.network_devices)) {
+            devices = responseData.network_devices;
+          } else if (Array.isArray(responseData)) {
+            devices = responseData;
+          }
+          
+          console.log('Switch: Loaded devices via WebSocket:', devices.length, 'devices');
+          setAllDevices(devices);
+          
+          if (devices.length === 0) {
+            setShowNoDevicesModal(true);
+          } else {
+            setShowSelectMessage(true);
+          }
+        } else {
+          console.log('Switch: No valid device data in WebSocket response');
+          setAllDevices([]);
+          setShowNoDevicesModal(true);
         }
+        setDevicesLoading(false);
+        setLastRefresh(new Date());
+        commandInProgressRef.current = false;
+        processNextCommand();
         break;
         
-      case 'create_vlan':
+      case 'check_network_device_validation':
+        console.log('Switch: Processing device status response');
+        setDeviceStatusLoading(false);
+        
+        // Handle both boolean true/false and string 'true'/'false' responses
+        if (responseData === true || responseData === 'true') {
+          setDeviceStatus('up');
+          console.log('Switch: Device is UP:', selectedDeviceData?.name || selectedDeviceData?.device_name);
+        } else if (responseData === false || responseData === 'false') {
+          setDeviceStatus('down');
+          setShowDeviceDownModal(true);
+          console.log('Switch: Device is DOWN:', selectedDeviceData?.name || selectedDeviceData?.device_name);
+        } else if (responseData && typeof responseData === 'object') {
+          // Handle object response for backward compatibility
+          if (responseData.status === true || responseData.status === 'true' || responseData.is_up === true) {
+            setDeviceStatus('up');
+            console.log('Switch: Device is UP:', selectedDeviceData?.name || selectedDeviceData?.device_name);
+          } else if (responseData.status === false || responseData.status === 'false' || responseData.is_up === false) {
+            setDeviceStatus('down');
+            setShowDeviceDownModal(true);
+            console.log('Switch: Device is DOWN:', selectedDeviceData?.name || selectedDeviceData?.device_name);
+          } else {
+            setDeviceStatus('error');
+            console.log('Switch: Device status check failed or returned unexpected response');
+          }
+        } else {
+          setDeviceStatus('error');
+          console.log('Switch: Device status check failed or returned unexpected response');
+        }
+        commandInProgressRef.current = false;
+        processNextCommand();
+        break;
+        
+      case 'create_vlan_switch_ansible':
         console.log('Switch: Processing create VLAN response');
         setLoading(false);
         
         if (responseData && responseData.success !== false) {
-          setSuccessMessage('VLAN created successfully on all marked machines!');
-          setVlanConfig({
-            vlanId: '',
-            vlanName: ''
-          });
+          setSuccessMessage('VLANs created successfully!');
+          setVlans([{ id: '', name: '' }]); 
+          
+          if (selectedDeviceData) {
+            fetchVlanDetailsForDevice(selectedDeviceData);
+          }
           
           setTimeout(() => {
             setSuccessMessage(null);
           }, 5000);
         } else {
-          const errorMsg = responseData?.error || 'Failed to create VLAN';
+          const errorMsg = responseData?.error || 'Failed to create VLANs';
           setError(`Error: ${errorMsg}`);
         }
+        commandInProgressRef.current = false;
+        processNextCommand();
         break;
         
-      case 'configure_vtp':
-        console.log('Switch: Processing configure VTP response');
+      case 'get_vlan_details_switch':
+        console.log('Switch: Processing VLAN details response');
+        setVlanDetailsLoading(false);
+        isFetchingRef.current = false;
+        
+        if (timeoutRef.current) {
+          clearTimeout(timeoutRef.current);
+          timeoutRef.current = null;
+        }
+        
+        if (responseData && responseData.success !== false) {
+          let vlanDetailsData = null;
+          
+          if (responseData.vlan_details) {
+            vlanDetailsData = responseData.vlan_details;
+          } else if (responseData.data && responseData.data.vlan_details) {
+            vlanDetailsData = responseData.data.vlan_details;
+          } else if (responseData.data) {
+            vlanDetailsData = responseData.data;
+          }
+          
+          if (vlanDetailsData) {
+            setVlanDetails(vlanDetailsData);
+            console.log('Switch: VLAN details loaded:', vlanDetailsData);
+          } else {
+            setVlanDetails(null);
+            console.log('Switch: No VLAN details found in response');
+          }
+        } else {
+          setVlanDetails(null);
+          console.log('Switch: No valid VLAN details in response');
+        }
+        commandInProgressRef.current = false;
+        processNextCommand();
+        break;
+        
+      case 'configure_vtp_server_switch_ansible':
+      case 'configure_vtp_client_switch_ansible':
+        console.log(`Switch: Processing ${command} response`);
         setLoading(false);
         
         if (responseData && responseData.success !== false) {
-          setSuccessMessage('VTP configured successfully on all marked machines!');
+          const mode = command === 'configure_vtp_server_switch_ansible' ? 'Server' : 'Client';
+          setSuccessMessage(`VTP ${mode} configured successfully!`);
           setVtpConfig({
             domainName: '',
             password: '',
@@ -176,51 +777,108 @@ const Switch = () => {
             setSuccessMessage(null);
           }, 5000);
         } else {
-          const errorMsg = responseData?.error || 'Failed to configure VTP';
+          const errorMsg = responseData?.error || `Failed to configure VTP ${command === 'configure_vtp_server_switch_ansible' ? 'Server' : 'Client'}`;
           setError(`Error: ${errorMsg}`);
         }
+        commandInProgressRef.current = false;
+        processNextCommand();
+        break;
+        
+      // ADD NEW COMMAND HANDLER: change_port_mode_switch_ansible
+      case 'change_port_mode_switch_ansible':
+        console.log('Switch: Processing port mode change response');
+        setLoading(false);
+        
+        if (responseData && responseData.success !== false) {
+          setSuccessMessage('Port mode changed successfully!');
+          setPorts([{ interfaceName: '', mode: 'access', vlanId: '' }]); 
+          
+          setTimeout(() => {
+            setSuccessMessage(null);
+          }, 5000);
+        } else {
+          const errorMsg = responseData?.error || 'Failed to change port mode';
+          setError(`Error: ${errorMsg}`);
+        }
+        commandInProgressRef.current = false;
+        processNextCommand();
+        break;
+        
+      // Handle the old is_device_up command for backward compatibility
+      case 'is_device_up':
+        console.log('Switch: Processing OLD is_device_up response (backward compatibility)');
+        setDeviceStatusLoading(false);
+        
+        // Handle the old response format
+        if (responseData && responseData.status === 'true') {
+          setDeviceStatus('up');
+          console.log('Switch: Device is UP (old format):', selectedDeviceData?.name || selectedDeviceData?.device_name);
+        } else if (responseData && responseData.status === 'false') {
+          setDeviceStatus('down');
+          setShowDeviceDownModal(true);
+          console.log('Switch: Device is DOWN (old format):', selectedDeviceData?.name || selectedDeviceData?.device_name);
+        } else {
+          setDeviceStatus('error');
+          console.log('Switch: Device status check failed or returned unexpected response (old format)');
+        }
+        commandInProgressRef.current = false;
+        processNextCommand();
         break;
         
       default:
         console.log(`Switch: Unhandled command: ${command}`);
+        commandInProgressRef.current = false;
+        processNextCommand();
     }
     
-  }, [processMachineInfo]);
+  }, [processNextCommand, selectedDeviceData, fetchVlanDetailsForDevice]);
 
-  const handleCreateVlan = () => {
-    if (!vlanConfig.vlanId.trim()) {
-      setError('Please enter VLAN ID');
+  const handleDeviceSelect = useCallback((deviceIp) => {
+    console.log('Switch: Device selection changed to:', deviceIp);
+    
+    if (!deviceIp) {
+      setSelectedDevice('');
+      setSelectedDeviceData(null);
+      setShowSelectMessage(true);
+      setVlanDetails(null);
+      setDeviceStatus(null);
+      setShowDeviceDownModal(false);
       return;
     }
     
-    if (!/^\d+$/.test(vlanConfig.vlanId.trim())) {
-      setError('VLAN ID must be a number');
+    setSelectedDevice(deviceIp);
+    setShowSelectMessage(false);
+    setVlanDetails(null);
+    setDeviceStatus(null);
+    setShowDeviceDownModal(false);
+    
+    const device = allDevices.find(d => (d.ip || d.device_ip) === deviceIp);
+    if (device) {
+      console.log('Switch: Selected device found:', device);
+      
+      setSelectedDeviceData(device);
+      
+      checkDeviceStatus(device);
+      
+      console.log('Switch: Fetching VLAN details for selected device:', device.name || device.device_name);
+      fetchVlanDetailsForDevice(device);
+    } else {
+      console.error('Switch: Selected device not found in allDevices');
+      setSelectedDeviceData(null);
+    }
+  }, [allDevices, checkDeviceStatus, fetchVlanDetailsForDevice]);
+
+  const handleCreateVlans = () => {
+    if (!validateDeviceSelection()) {
       return;
     }
-    
-    const vlanIdNum = parseInt(vlanConfig.vlanId.trim());
-    if (vlanIdNum < 1 || vlanIdNum > 4094) {
-      setError('VLAN ID must be between 1 and 4094');
-      return;
-    }
-    
-    if (!vlanConfig.vlanName.trim()) {
-      setError('Please enter VLAN Name');
-      return;
-    }
-    
-    if (vlanConfig.vlanName.trim().length < 2) {
-      setError('VLAN Name must be at least 2 characters long');
+
+    if (!validateVlans()) {
       return;
     }
 
     if (!isConnected) {
-      setError('Cannot create VLAN: Not connected to backend system');
-      return;
-    }
-
-    if (markedMachines.length === 0) {
-      setError('No marked machines found');
+      setError('Cannot create VLANs: Not connected to backend system');
       return;
     }
 
@@ -228,28 +886,27 @@ const Switch = () => {
     setError(null);
     setSuccessMessage(null);
     
-    console.log('Switch: Creating VLAN on all marked machines:', {
-      markedMachinesCount: markedMachines.length,
-      vlanId: vlanConfig.vlanId,
-      vlanName: vlanConfig.vlanName
-    });
-
-    const windowsInfos = markedMachines.map(machine => ({
-      ip: machine.ip,
-      username: machine.username || 'admin',
-      password: machine.password
-    }));
-
-    const payload = {
-      windows_infos: windowsInfos,
-      vlan_id: parseInt(vlanConfig.vlanId.trim()),
-      vlan_name: vlanConfig.vlanName.trim()
-    };
+    console.log('Switch: Creating VLANs with network_device_info from database');
     
-    sendCommand('create_vlan', payload);
+    const payload = createVlanPayload();
+    if (!payload) {
+      setLoading(false);
+      return;
+    }
+    
+    console.log('Switch: Sending payload (NEW structure):', {
+      ...payload,
+      network_device_info: { ...payload.network_device_info, password: '***HIDDEN***' }
+    });
+    
+    sendCommandWithFlow('create_vlan_switch_ansible', payload);
   };
 
   const handleConfigureVtp = () => {
+    if (!validateDeviceSelection()) {
+      return;
+    }
+
     if (!vtpConfig.domainName.trim()) {
       setError('Please enter VTP Domain Name');
       return;
@@ -275,8 +932,50 @@ const Switch = () => {
       return;
     }
 
-    if (markedMachines.length === 0) {
-      setError('No marked machines found');
+    setLoading(true);
+    setError(null);
+    setSuccessMessage(null);
+    
+    console.log('Switch: Configuring VTP with network_device_info from database');
+    
+    const devicePayload = createDevicePayload();
+    if (!devicePayload) {
+      setLoading(false);
+      return;
+    }
+    
+    const payload = {
+      ...devicePayload,
+      vtp_domain: vtpConfig.domainName.trim(),  // Changed from domain_name to vtp_domain
+      vtp_password: vtpConfig.password.trim()   // Changed from password to vtp_password
+    };
+    
+    console.log('Switch: Sending VTP payload:', {
+      ...payload,
+      network_device_info: { ...payload.network_device_info, password: '***HIDDEN***' }
+    });
+    
+    // Send different command based on selected mode
+    const command = vtpConfig.mode === 'server' 
+      ? 'configure_vtp_server_switch_ansible' 
+      : 'configure_vtp_client_switch_ansible';
+    
+    console.log(`Switch: Sending command: ${command} for mode: ${vtpConfig.mode}`);
+    sendCommandWithFlow(command, payload);
+  };
+
+  // Port Configuration Handler
+  const handleConfigurePorts = () => {
+    if (!validateDeviceSelection()) {
+      return;
+    }
+
+    if (!validatePorts()) {
+      return;
+    }
+
+    if (!isConnected) {
+      setError('Cannot configure port mode: Not connected to backend system');
       return;
     }
 
@@ -284,123 +983,122 @@ const Switch = () => {
     setError(null);
     setSuccessMessage(null);
     
-    console.log('Switch: Configuring VTP on all marked machines:', {
-      markedMachinesCount: markedMachines.length,
-      domainName: vtpConfig.domainName,
-      mode: vtpConfig.mode
-    });
-
-    const windowsInfos = markedMachines.map(machine => ({
-      ip: machine.ip,
-      username: machine.username || 'admin',
-      password: machine.password
-    }));
-
-    const payload = {
-      windows_infos: windowsInfos,
-      domain_name: vtpConfig.domainName.trim(),
-      password: vtpConfig.password.trim(),
-      mode: vtpConfig.mode
-    };
+    console.log('Switch: Configuring port mode with network_device_info from database');
     
-    sendCommand('configure_vtp', payload);
+    const payload = createPortPayload();
+    if (!payload) {
+      setLoading(false);
+      return;
+    }
+    
+    console.log('Switch: Sending port configuration payload:', {
+      ...payload,
+      network_device_info: { ...payload.network_device_info, password: '***HIDDEN***' }
+    });
+    
+    sendCommandWithFlow('change_port_mode_switch_ansible', payload);
   };
 
-  const handleRefreshMachines = () => {
-    console.log('Switch: Refreshing machine list');
-    fetchMachineInfo();
+  const handleRefreshDevices = useCallback(() => {
+    fetchDevices();
+  }, [fetchDevices]);
+
+  const handleRetryDeviceCheck = () => {
+    setShowDeviceDownModal(false);
+    checkDeviceStatus();
   };
 
-  const getMachineRoles = (machine) => {
-    if (!machine.marked_as || !Array.isArray(machine.marked_as)) return [];
-    return machine.marked_as.map(mark => `${mark.role} ${mark.type}`).join(', ');
+  const handleSelectDifferentDevice = () => {
+    setShowDeviceDownModal(false);
+    setSelectedDevice('');
+    setSelectedDeviceData(null);
+    setDeviceStatus(null);
+    setVlanDetails(null);
+    setShowSelectMessage(true);
   };
+
+  const handleRefreshVlanDetails = useCallback(() => {
+    if (selectedDeviceData) {
+      fetchVlanDetailsForDevice(selectedDeviceData);
+    }
+  }, [selectedDeviceData, fetchVlanDetailsForDevice]);
 
   useEffect(() => {
-    if (!machineInfoListenerRef.current) {
-      console.log('Switch Component Mounted - Setting up WebSocket listener');
+    console.log('Switch Component Mounted');
+    mountedRef.current = true;
+    
+    fetchDevices();
+    
+    return () => {
+      console.log('Switch Component Unmounting');
+      mountedRef.current = false;
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+        timeoutRef.current = null;
+      }
+      isFetchingRef.current = false;
+      fetchInProgressRef.current = false;
+      commandInProgressRef.current = false;
+      pendingCommandsRef.current = [];
+    };
+  }, [fetchDevices]);
+
+  useEffect(() => {
+    if (!webSocketListenerRef.current && mountedRef.current) {
+      console.log('Switch: Setting up WebSocket listener');
       const removeListener = addListener(handleWebSocketMessage);
-      machineInfoListenerRef.current = true;
+      webSocketListenerRef.current = true;
       
       return () => {
-        if (removeListener) removeListener();
-        machineInfoListenerRef.current = false;
+        if (removeListener) {
+          removeListener();
+        }
+        webSocketListenerRef.current = false;
       };
     }
   }, [addListener, handleWebSocketMessage]);
 
-  useEffect(() => {
-    if (isConnected && markedMachines.length === 0) {
-      console.log('Switch: Connected, fetching machine info...');
-      fetchMachineInfo();
-    }
-  }, [isConnected, fetchMachineInfo, markedMachines.length]);
-
-  const MarkMachineModal = () => {
-    if (!showMarkModal) return null;
+  const NoDevicesModal = () => {
+    if (!showNoDevicesModal || devicesLoading) return null;
 
     return (
       <div className="modal-overlay">
         <div className="modal-container">
           <div className="modal-content">
             <div className="modal-header">
-              <h3 className="modal-title">No Marked Machines Found</h3>
+              <h3 className="modal-title">No Network Devices Found</h3>
             </div>
             <div className="modal-body">
               <div className="modal-message">
-                <p>No machines are currently marked as DNS, DHCP, or AD roles.</p>
-                <p>To configure switch settings, you need to mark at least one machine in Machine Management first.</p>
-              </div>
-              
-              <div className="modal-stats-grid">
-                <div className="modal-stat-item">
-                  <div className="modal-stat-label">MARKED MACHINES</div>
-                  <div className="modal-stat-value">{markedMachines.length}</div>
-                </div>
-                <div className="modal-stat-item">
-                  <div className="modal-stat-label">CONNECTION</div>
-                  <div className="modal-stat-value">
-                    {isConnected ? 'Online' : 'Offline'}
-                  </div>
-                </div>
-                <div className="modal-stat-item">
-                  <div className="modal-stat-label">ACTIVE TAB</div>
-                  <div className="modal-stat-value">
-                    {activeTab === 'vlan' ? 'VLAN' : 'VTP'}
-                  </div>
-                </div>
-                <div className="modal-stat-item">
-                  <button 
-                    className="modal-refresh-btn"
-                    onClick={handleRefreshMachines}
-                  >
-                    Refresh Machines
-                  </button>
-                </div>
+                <p>No network devices are currently configured in the database.</p>
+                <p>To configure switch settings, you need to add at least one network device with SSH credentials in Network Device Management.</p>
               </div>
               
               <div className="modal-actions">
                 <button 
                   className="modal-btn-primary"
                   onClick={() => {
-                    setShowMarkModal(false);
-                    window.location.href = '/machine-management';
+                    setShowNoDevicesModal(false);
+                    window.location.href = '/network-management';
                   }}
+                  disabled={commandInProgressRef.current}
                 >
-                  Go to Machine Management
+                  Go to Network Device Management
                 </button>
                 <button 
                   className="modal-btn-secondary"
                   onClick={() => {
-                    setShowMarkModal(false);
-                    handleRefreshMachines();
+                    setShowNoDevicesModal(false);
+                    handleRefreshDevices();
                   }}
+                  disabled={loading || commandInProgressRef.current}
                 >
-                  Refresh Machine List
+                  Refresh Device List
                 </button>
                 <button 
                   className="modal-btn-tertiary"
-                  onClick={() => setShowMarkModal(false)}
+                  onClick={() => setShowNoDevicesModal(false)}
+                  disabled={loading || commandInProgressRef.current}
                 >
                   Continue Anyway
                 </button>
@@ -411,6 +1109,81 @@ const Switch = () => {
       </div>
     );
   };
+
+  const DeviceDownModal = () => {
+    if (!showDeviceDownModal || !selectedDeviceData) return null;
+
+    return (
+      <div className="modal-overlay">
+        <div className="modal-container">
+          <div className="modal-content">
+            <div className="modal-header">
+              <h3 className="modal-title">
+                <AlertCircle size={24} className="modal-title-icon" />
+                Device Not Reachable
+              </h3>
+            </div>
+            <div className="modal-body">
+              <div className="modal-message">
+                <div className="device-down-alert">
+                  <WifiOff size={48} className="device-down-icon" />
+                  <h4>Device Connectivity Issue</h4>
+                  <p>The selected device <strong>{selectedDeviceData.name || selectedDeviceData.device_name}</strong> ({selectedDeviceData.ip || selectedDeviceData.device_ip}) is not reachable.</p>
+                  
+                  <div className="device-down-reasons">
+                    <p>Possible reasons:</p>
+                    <ul>
+                      <li>Device is powered off</li>
+                      <li>Network connectivity issues</li>
+                      <li>Firewall blocking ICMP/ping requests</li>
+                      <li>Device is in a different network</li>
+                    </ul>
+                  </div>
+                  
+                  <p>Please ensure the device is powered on and connected to the network before proceeding.</p>
+                </div>
+              </div>
+              
+              <div className="modal-actions">
+                <button 
+                  className="modal-btn-primary"
+                  onClick={handleRetryDeviceCheck}
+                  disabled={deviceStatusLoading || commandInProgressRef.current}
+                >
+                  {deviceStatusLoading ? (
+                    <>
+                      <RefreshCw size={16} className="spinning" />
+                      Checking Again...
+                    </>
+                  ) : (
+                    <>
+                      <RefreshCw size={16} />
+                      Check Again
+                    </>
+                  )}
+                </button>
+                <button 
+                  className="modal-btn-secondary"
+                  onClick={handleSelectDifferentDevice}
+                  disabled={commandInProgressRef.current}
+                >
+                  Select Different Device
+                </button>
+                <button 
+                  className="modal-btn-tertiary"
+                  onClick={() => setShowDeviceDownModal(false)}
+                  disabled={commandInProgressRef.current}
+                >
+                  Continue Anyway
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
 
   return (
     <div className="switch-container">
@@ -425,6 +1198,7 @@ const Switch = () => {
                     ? 'nav-button-active'
                     : 'nav-button-inactive'
                   }`}
+                disabled={commandInProgressRef.current}
               >
                 {item}
               </button>
@@ -434,87 +1208,171 @@ const Switch = () => {
 
         <div className="switch-grid">
           <div className="switch-left-column">
-            <div className="stats-controls-card">
-              <div className="stats-controls-header">
+            <div className="connection-card">
+              <div className="connection-header">
                 <h3 className="section-title">Switch Configuration</h3>
-                <div className="controls-actions">
-                  <button
-                    onClick={handleRefreshMachines}
-                    className="refresh-machines-btn"
-                    disabled={machinesLoading}
-                  >
-                    {machinesLoading ? 'Loading...' : 'Refresh Machines'}
-                  </button>
-                </div>
-              </div>
-              
-              <div className="stats-grid">
-                <div className="stat-item">
-                  <div className="stat-count">{markedMachines.length}</div>
-                  <div className="stat-label">Marked Machines</div>
-                </div>
-                <div className="stat-item">
-                  <div className="stat-count">
-                    {isConnected ? 'Connected' : 'Disconnected'}
-                  </div>
-                </div>
-                <div className="stat-item">
-                  <div className="stat-count">{activeTab === 'vlan' ? 'VLAN' : 'VTP'}</div>
-                </div>
-              </div>
-            </div>
-
-            <div className="machine-list-card">
-              <div className="machine-list-header">
-                <h3 className="section-title">
-                  Available Machines ({markedMachines.length})
-                </h3>
-                <div className="machine-list-status">
+                <div className={`device-list-status ${isConnected ? 'connected' : 'disconnected'}`}>
                   {isConnected ? 'Connected' : 'Disconnected'}
+                  {commandInProgressRef.current && ' | Busy'}
                 </div>
               </div>
               
-              {machinesLoading ? (
-                <div className="loading-message">
-                  <div className="loading-spinner"></div>
-                  Loading machine information...
-                </div>
-              ) : markedMachines.length === 0 ? (
-                <div className="no-machines-configured">
-                  <div className="configure-machines-prompt">
-                    <p>No marked machines found in database.</p>
-                    <p>Please mark machines in Machine Management first.</p>
-                  </div>
-                </div>
-              ) : (
-                <div className="machine-list">
-                  {markedMachines.map(machine => (
-                    <div 
-                      key={machine.id}
-                      className="machine-item"
+              <div className="connection-form">
+                <div className="form-group">
+                  <label className="form-label">
+                    Select Device <span className="required">*</span>
+                  </label>
+                  <div className="select-wrapper">
+                    <select
+                      value={selectedDevice}
+                      onChange={(e) => handleDeviceSelect(e.target.value)}
+                      className="device-select"
+                      disabled={devicesLoading || loading || !isConnected || commandInProgressRef.current}
                     >
-                      <div className="machine-item-header">
-                        <div className="machine-item-name">{machine.name}</div>
-                        <div className="machine-item-status">
-                          <span className={`status-dot ${isConnected ? 'connected' : 'disconnected'}`}></span>
-                          {isConnected ? 'Online' : 'Offline'}
+                      <option value="">Select a network device...</option>
+                      {allDevices.map(device => {
+                        const ip = device.ip || device.device_ip;
+                        const name = device.name || device.device_name || 'Unnamed Device';
+                        const hasPassword = !!(device.ssh_password || device.password);
+                        const hasUsername = !!(device.ssh_username || device.username);
+                        const hasCredentials = hasPassword && hasUsername;
+                        
+                        return (
+                          <option key={device.id || device.device_id} value={ip}>
+                            {name} ({ip}) {hasCredentials ? '✓' : '✗'}
+                          </option>
+                        );
+                      })}
+                    </select>
+                  </div>
+                  
+                  <div className="device-controls">
+                    <button
+                      onClick={handleRefreshDevices}
+                      className="refresh-devices-btn"
+                      disabled={devicesLoading || loading || !isConnected || commandInProgressRef.current}
+                    >
+                      <RefreshCw size={16} />
+                      {devicesLoading ? ' Loading...' : ' Refresh Devices'}
+                    </button>
+                  </div>
+                  
+                  {showSelectMessage && !selectedDevice && allDevices.length > 0 && (
+                    <div className="select-device-message">
+                      <div className="select-message-content">
+                        <div className="select-message-icon">ℹ️</div>
+                        <div className="select-message-text">
+                          <h3>Select a Device to Configure</h3>
+                          <p>Please select a device from the dropdown above to configure switch settings.</p>
+                          <p>Once you select a device, credentials will be loaded automatically from the database and VLAN details will be fetched.</p>
                         </div>
                       </div>
-                      <div className="machine-item-ip">{machine.ip}</div>
-                      <div className="machine-item-user">{machine.username}</div>
-                      {machine.marked_as && Array.isArray(machine.marked_as) && machine.marked_as.length > 0 && (
-                        <div className="machine-item-roles">
-                          {machine.marked_as.map((mark, idx) => (
-                            <span key={idx} className={`role-badge ${mark.role}`}>
-                              {mark.role} {mark.type}
-                            </span>
-                          ))}
-                        </div>
-                      )}
                     </div>
-                  ))}
+                  )}
+                  
+                  {selectedDeviceData && (
+                    <div className="selected-device-info">
+                      <div className="selected-device-header">
+                        <div className="selected-device-name">
+                          {selectedDeviceData.name || selectedDeviceData.device_name}
+                          <div className="device-status-indicator">
+                            {deviceStatus === 'checking' && (
+                              <span className="device-status checking">
+                                <RefreshCw size={12} className="spinning" />
+                                Checking connectivity...
+                              </span>
+                            )}
+                            {deviceStatus === 'up' && (
+                              <span className="device-status up">
+                                <Wifi size={12} />
+                                Device is reachable
+                              </span>
+                            )}
+                            {deviceStatus === 'down' && (
+                              <span className="device-status down">
+                                <WifiOff size={12} />
+                                Device not reachable
+                              </span>
+                            )}
+                            {deviceStatus === 'error' && (
+                              <span className="device-status error">
+                                <AlertCircle size={12} />
+                                Status check failed
+                              </span>
+                            )}
+                          </div>
+                          <span className={`credential-status ${(selectedDeviceData.ssh_password || selectedDeviceData.password) && (selectedDeviceData.ssh_username || selectedDeviceData.username) ? 'good' : 'bad'}`}>
+                            {(selectedDeviceData.ssh_password || selectedDeviceData.password) && (selectedDeviceData.ssh_username || selectedDeviceData.username) ? '✓ Credentials OK' : '✗ Missing Credentials'}
+                          </span>
+                        </div>
+                        {vlanDetailsLoading && (
+                          <button
+                            className="refresh-vlan-btn"
+                            disabled={true}
+                          >
+                            <RefreshCw size={12} className="spinning" />
+                            Loading VLANs...
+                          </button>
+                        )}
+                      </div>
+                      <div className="selected-device-details">
+                        <div className="device-detail-item">
+                          <span className="detail-label">IP Address:</span>
+                          <span className="detail-value">{selectedDeviceData.ip || selectedDeviceData.device_ip}</span>
+                        </div>
+                        <div className="device-detail-item">
+                          <span className="detail-label">Username:</span>
+                          <span className="detail-value">{selectedDeviceData.ssh_username || selectedDeviceData.username || 'Not set'}</span>
+                        </div>
+                        <div className="device-detail-item">
+                          <span className="detail-label">Device Type:</span>
+                          <span className="detail-value">
+                            {selectedDeviceData.device_type || 'switch'}
+                          </span>
+                        </div>
+                        <div className="device-detail-item">
+                          <span className="detail-label">Status:</span>
+                          <span className="detail-value">{selectedDeviceData.status || 'active'}</span>
+                        </div>
+                      </div>
+                      <div className="selected-device-note">
+                        <p><strong>Note:</strong> Credentials are loaded from database. No manual input required.</p>
+                        {deviceStatus === 'down' && (
+                          <p className="device-down-note">
+                            <AlertCircle size={12} />
+                            <strong>Warning:</strong> Device is not reachable. Configuration commands may fail.
+                          </p>
+                        )}
+                        {vlanDetails && (
+                          <p className="vlan-details-note">
+                            ✓ VLAN details loaded: {Object.keys(vlanDetails).length} VLAN(s) found
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  )}
                 </div>
-              )}
+                
+                {!selectedDevice && allDevices.length > 0 && (
+                  <div className="device-selection-prompt">
+                    <p>Please select a device from the dropdown above to configure switch settings.</p>
+                    <p>Credentials will be automatically loaded from the database and VLAN details will be fetched.</p>
+                  </div>
+                )}
+                
+                {allDevices.length === 0 && !devicesLoading && (
+                  <div className="no-devices-configured">
+                    <p>No network devices found in database.</p>
+                    <button
+                      onClick={() => window.location.href = '/network-management'}
+                      className="btn-add-device"
+                      disabled={commandInProgressRef.current}
+                    >
+                      Go to Network Device Management
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
 
@@ -523,183 +1381,477 @@ const Switch = () => {
               <button
                 className={`config-tab ${activeTab === 'vlan' ? 'active' : ''}`}
                 onClick={() => setActiveTab('vlan')}
-                disabled={loading}
+                disabled={loading || !isConnected || !selectedDevice || commandInProgressRef.current}
               >
                 VLAN Configuration
               </button>
               <button
                 className={`config-tab ${activeTab === 'vtp' ? 'active' : ''}`}
                 onClick={() => setActiveTab('vtp')}
-                disabled={loading}
+                disabled={loading || !isConnected || !selectedDevice || commandInProgressRef.current}
               >
                 VTP Configuration
+              </button>
+              <button
+                className={`config-tab ${activeTab === 'port' ? 'active' : ''}`}
+                onClick={() => setActiveTab('port')}
+                disabled={loading || !isConnected || !selectedDevice || commandInProgressRef.current}
+              >
+                Port Configuration
               </button>
             </div>
 
             {activeTab === 'vlan' ? (
               <div className="vlan-config-card">
-                <h3 className="form-title">Create VLAN</h3>
+                <div className="vlan-header">
+                  <h3 className="form-title">Create VLANs</h3>
+                  <div className="vlan-subtitle">
+                    <p>You can create multiple VLANs at once</p>
+                    <button
+                      onClick={handleRefreshVlanDetails}
+                      className="btn-fetch-vlans"
+                      disabled={vlanDetailsLoading || !isConnected || !selectedDevice || commandInProgressRef.current}
+                    >
+                      {vlanDetailsLoading ? (
+                        <>
+                          <RefreshCw size={16} className="spinning" />
+                          Loading...
+                        </>
+                      ) : (
+                        <>
+                          <RefreshCw size={16} />
+                          Refresh VLANs
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+                
                 <div className="form-content">
-                  {markedMachines.length === 0 ? (
-                    <div className="no-machines-notice">
-                      <div className="notice-icon">⚠️</div>
-                      <p>No marked machines available.</p>
-                      <p>Please mark machines in Machine Management first.</p>
-                      <button
-                        onClick={handleRefreshMachines}
-                        className="btn-refresh-machines"
-                      >
-                        Refresh Machines
-                      </button>
-                    </div>
-                  ) : (
-                    <>
-                      <div className="form-group">
-                        <label className="form-label">
-                          VLAN ID
-                          <span className="form-hint">(1-4094)</span>
-                        </label>
-                        <input
-                          type="number"
-                          value={vlanConfig.vlanId}
-                          onChange={(e) => setVlanConfig({ ...vlanConfig, vlanId: e.target.value })}
-                          className="form-input"
-                          placeholder="Enter VLAN ID"
-                          min="1"
-                          max="4094"
-                          disabled={loading || !isConnected}
-                        />
+                  {vlans.map((vlan, index) => (
+                    <div key={index} className="vlan-input-group">
+                      <div className="vlan-input-header">
+                        <span className="vlan-number">VLAN #{index + 1}</span>
+                        {vlans.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => removeVlan(index)}
+                            className="btn-remove-vlan"
+                            disabled={loading || !isConnected || !selectedDevice || commandInProgressRef.current}
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        )}
                       </div>
-                      <div className="form-group">
-                        <label className="form-label">VLAN Name</label>
-                        <input
-                          type="text"
-                          value={vlanConfig.vlanName}
-                          onChange={(e) => setVlanConfig({ ...vlanConfig, vlanName: e.target.value })}
-                          className="form-input"
-                          placeholder="Enter VLAN name"
-                          disabled={loading || !isConnected}
-                        />
-                      </div>
-                      
-                      <div className="config-preview">
-                        <h4>Configuration Preview</h4>
-                        <div className="preview-content">
-                          <div className="preview-row">
-                            <span className="preview-label">Target Machines:</span>
-                            <span className="preview-value">{markedMachines.length} machines</span>
-                          </div>
-                          <div className="preview-row">
-                            <span className="preview-label">VLAN ID:</span>
-                            <span className="preview-value">{vlanConfig.vlanId || 'Not set'}</span>
-                          </div>
-                          <div className="preview-row">
-                            <span className="preview-label">VLAN Name:</span>
-                            <span className="preview-value">{vlanConfig.vlanName || 'Not set'}</span>
-                          </div>
-                          <div className="preview-row">
-                            <span className="preview-label">Operation:</span>
-                            <span className="preview-value">Create VLAN on all marked machines</span>
-                          </div>
+                      <div className="vlan-input-row">
+                        <div className="vlan-input-field">
+                          <label className="form-label">
+                            VLAN ID
+                            <span className="form-hint">(1-4094)</span>
+                          </label>
+                          <input
+                            type="number"
+                            value={vlan.id}
+                            onChange={(e) => updateVlan(index, 'id', e.target.value)}
+                            className="form-input"
+                            placeholder="Enter VLAN ID"
+                            min="1"
+                            max="4094"
+                            disabled={loading || !isConnected || !selectedDevice || commandInProgressRef.current}
+                          />
+                        </div>
+                        <div className="vlan-input-field">
+                          <label className="form-label">VLAN Name</label>
+                          <input
+                            type="text"
+                            value={vlan.name}
+                            onChange={(e) => updateVlan(index, 'name', e.target.value)}
+                            className="form-input"
+                            placeholder="Enter VLAN name"
+                            disabled={loading || !isConnected || !selectedDevice || commandInProgressRef.current}
+                          />
                         </div>
                       </div>
-                      
-                      <button
-                        onClick={handleCreateVlan}
-                        className="form-button"
-                        disabled={loading || !isConnected || !vlanConfig.vlanId || !vlanConfig.vlanName}
-                      >
-                        {loading ? 'Creating VLAN...' : 'Create VLAN on All Machines'}
-                      </button>
-                    </>
-                  )}
+                    </div>
+                  ))}
+                  
+                  <div className="vlan-actions">
+                    <button
+                      onClick={addVlan}
+                      className="btn-add-vlan"
+                      disabled={loading || !isConnected || !selectedDevice || vlans.length >= 10 || commandInProgressRef.current}
+                    >
+                      <Plus size={16} />
+                      Add Another VLAN
+                    </button>
+                    <span className="vlan-count">
+                      {vlans.length} VLAN(s) configured
+                    </span>
+                  </div>
+                  
+                  <div className="config-preview">
+                    <h4>Configuration Preview</h4>
+                    <div className="preview-content">
+                      <div className="preview-row">
+                        <span className="preview-label">Device:</span>
+                        <span className="preview-value">
+                          {selectedDeviceData?.name || selectedDeviceData?.device_name || 'Not selected'}
+                        </span>
+                      </div>
+                      <div className="preview-row">
+                        <span className="preview-label">Switch IP:</span>
+                        <span className="preview-value">{selectedDeviceData?.ip || selectedDeviceData?.device_ip || 'Not selected'}</span>
+                      </div>
+                      <div className="preview-row">
+                        <span className="preview-label">Device Status:</span>
+                        <span className="preview-value">
+                          {deviceStatus === 'up' ? (
+                            <span className="status-up">✓ Reachable</span>
+                          ) : deviceStatus === 'down' ? (
+                            <span className="status-down">✗ Not Reachable</span>
+                          ) : deviceStatus === 'checking' ? (
+                            <span className="status-checking">Checking...</span>
+                          ) : (
+                            <span className="status-unknown">Unknown</span>
+                          )}
+                        </span>
+                      </div>
+                      <div className="preview-row">
+                        <span className="preview-label">VLANs to Create:</span>
+                        <span className="preview-value">
+                          {vlans.filter(v => v.id && v.name).length > 0 
+                            ? vlans.filter(v => v.id && v.name).map(v => `VLAN ${v.id}: ${v.name}`).join(', ')
+                            : 'No VLANs configured'
+                          }
+                        </span>
+                      </div>
+                      <div className="preview-row">
+                        <span className="preview-label">Operation:</span>
+                        <span className="preview-value">Create VLANs using stored credentials</span>
+                      </div>
+                    </div>
+                  </div>
+                  
+                  <button
+                    onClick={handleCreateVlans}
+                    className="form-button"
+                    disabled={loading || !isConnected || !selectedDevice || vlans.filter(v => v.id && v.name).length === 0 || commandInProgressRef.current}
+                  >
+                    {loading ? 'Creating VLANs...' : 'Create VLANs'}
+                  </button>
                 </div>
+                
+                {selectedDevice && (
+                  <div className="vlan-details-section">
+                    <div className="vlan-details-header">
+                      <h4 className="vlan-details-title">
+                        VLANs on {selectedDeviceData?.name || selectedDeviceData?.device_name || 'Selected Device'}
+                        {vlanDetails && (
+                          <span className="vlan-count-badge">
+                            {Object.keys(vlanDetails).length} VLAN(s)
+                          </span>
+                        )}
+                      </h4>
+                      {vlanDetails && (
+                        <button
+                          onClick={handleRefreshVlanDetails}
+                          className="btn-refresh-vlans-small"
+                          disabled={vlanDetailsLoading || commandInProgressRef.current}
+                        >
+                          {vlanDetailsLoading ? (
+                            <RefreshCw size={14} className="spinning" />
+                          ) : (
+                            <RefreshCw size={14} />
+                          )}
+                        </button>
+                      )}
+                    </div>
+                    
+                    {vlanDetailsLoading ? (
+                      <div className="vlan-details-loading">
+                        <div className="loading-spinner-small"></div>
+                        Loading VLAN details from device...
+                      </div>
+                    ) : vlanDetails && Object.keys(vlanDetails).length > 0 ? (
+                      <div className="vlan-details-table">
+                        <div className="vlan-details-header-row">
+                          <div className="vlan-header-cell">VLAN ID</div>
+                          <div className="vlan-header-cell">Name</div>
+                          <div className="vlan-header-cell">Status</div>
+                          <div className="vlan-header-cell">Ports</div>
+                        </div>
+                        <div className="vlan-details-body">
+                          {Object.entries(vlanDetails).map(([key, vlan]) => (
+                            <div key={key} className="vlan-details-row">
+                              <div className="vlan-details-cell">{vlan.id}</div>
+                              <div className="vlan-details-cell">{vlan.name}</div>
+                              <div className="vlan-details-cell">
+                                <span className={`vlan-status ${vlan.status === 'active' ? 'active' : 'inactive'}`}>
+                                  {vlan.status || 'N/A'}
+                                </span>
+                              </div>
+                              <div className="vlan-details-cell">{vlan.ports || 'None'}</div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ) : selectedDevice && !vlanDetailsLoading ? (
+                      <div className="no-vlans-message">
+                        <p>No VLANs found on this device.</p>
+                        <p>Create new VLANs using the form above.</p>
+                      </div>
+                    ) : null}
+                  </div>
+                )}
               </div>
-            ) : (
+            ) : activeTab === 'vtp' ? (
               <div className="vtp-config-card">
                 <h3 className="form-title">Configure VTP</h3>
                 <div className="form-content">
-                  {markedMachines.length === 0 ? (
-                    <div className="no-machines-notice">
-                      <div className="notice-icon">⚠️</div>
-                      <p>No marked machines available.</p>
-                      <p>Please mark machines in Machine Management first.</p>
-                      <button
-                        onClick={handleRefreshMachines}
-                        className="btn-refresh-machines"
-                      >
-                        Refresh Machines
-                      </button>
+                  <div className="form-group">
+                    <label className="form-label">VTP Domain Name</label>
+                    <input
+                      type="text"
+                      value={vtpConfig.domainName}
+                      onChange={(e) => setVtpConfig({ ...vtpConfig, domainName: e.target.value })}
+                      className="form-input"
+                      placeholder="Enter VTP domain name"
+                      disabled={loading || !isConnected || !selectedDevice || commandInProgressRef.current}
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">VTP Password</label>
+                    <input
+                      type="password"
+                      value={vtpConfig.password}
+                      onChange={(e) => setVtpConfig({ ...vtpConfig, password: e.target.value })}
+                      className="form-input"
+                      placeholder="Enter VTP password"
+                      disabled={loading || !isConnected || !selectedDevice || commandInProgressRef.current}
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">VTP Mode</label>
+                    <select
+                      value={vtpConfig.mode}
+                      onChange={(e) => setVtpConfig({ ...vtpConfig, mode: e.target.value })}
+                      className="form-select"
+                      disabled={loading || !isConnected || !selectedDevice || commandInProgressRef.current}
+                    >
+                      <option value="server">Server</option>
+                      <option value="client">Client</option>
+                      {/* Removed transparent option */}
+                    </select>
+                  </div>
+                  
+                  <div className="config-preview">
+                    <h4>Configuration Preview</h4>
+                    <div className="preview-content">
+                      <div className="preview-row">
+                        <span className="preview-label">Device:</span>
+                        <span className="preview-value">
+                          {selectedDeviceData?.name || selectedDeviceData?.device_name || 'Not selected'}
+                        </span>
+                      </div>
+                      <div className="preview-row">
+                        <span className="preview-label">Switch IP:</span>
+                        <span className="preview-value">{selectedDeviceData?.ip || selectedDeviceData?.device_ip || 'Not selected'}</span>
+                      </div>
+                      <div className="preview-row">
+                        <span className="preview-label">Device Status:</span>
+                        <span className="preview-value">
+                          {deviceStatus === 'up' ? (
+                            <span className="status-up">✓ Reachable</span>
+                          ) : deviceStatus === 'down' ? (
+                            <span className="status-down">✗ Not Reachable</span>
+                          ) : deviceStatus === 'checking' ? (
+                            <span className="status-checking">Checking...</span>
+                          ) : (
+                            <span className="status-unknown">Unknown</span>
+                          )}
+                        </span>
+                      </div>
+                      <div className="preview-row">
+                        <span className="preview-label">Domain Name:</span>
+                        <span className="preview-value">{vtpConfig.domainName || 'Not set'}</span>
+                      </div>
+                      <div className="preview-row">
+                        <span className="preview-label">Mode:</span>
+                        <span className="preview-value">
+                          {vtpConfig.mode === 'server' ? 'VTP Server' : 'VTP Client'}
+                        </span>
+                      </div>
+                      <div className="preview-row">
+                        <span className="preview-label">Command to be sent:</span>
+                        <span className="preview-value">
+                          {vtpConfig.mode === 'server' ? 'configure_vtp_server_switch_ansible' : 'configure_vtp_client_switch_ansible'}
+                        </span>
+                      </div>
+                      <div className="preview-row">
+                        <span className="preview-label">Operation:</span>
+                        <span className="preview-value">Configure VTP using stored credentials</span>
+                      </div>
                     </div>
-                  ) : (
-                    <>
-                      <div className="form-group">
-                        <label className="form-label">VTP Domain Name</label>
-                        <input
-                          type="text"
-                          value={vtpConfig.domainName}
-                          onChange={(e) => setVtpConfig({ ...vtpConfig, domainName: e.target.value })}
-                          className="form-input"
-                          placeholder="Enter VTP domain name"
-                          disabled={loading || !isConnected}
-                        />
+                  </div>
+                  
+                  <button
+                    onClick={handleConfigureVtp}
+                    className="form-button"
+                    disabled={loading || !isConnected || !selectedDevice || !vtpConfig.domainName || !vtpConfig.password || commandInProgressRef.current}
+                  >
+                    {loading ? 'Configuring VTP...' : 
+                     vtpConfig.mode === 'server' ? 'Configure VTP Server' : 'Configure VTP Client'}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="port-config-card">
+                <div className="port-header">
+                  <h3 className="form-title">Port Configuration</h3>
+                  <div className="port-subtitle">
+                    <p>Configure port mode (Access or Trunk)</p>
+                    <div className="port-mode-info">
+                      <span className="info-tag">Access:</span>
+                      <span className="info-text">Carries traffic for a single VLAN (VLAN ID required)</span>
+                      <span className="info-tag">Trunk:</span>
+                    </div>
+                  </div>
+                </div>
+                
+                <div className="form-content">
+                  {ports.map((port, index) => (
+                    <div key={index} className="port-input-group">
+                      <div className="port-input-header">
+                        <span className="port-number">Port #{index + 1}</span>
+                        {ports.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => removePort(index)}
+                            className="btn-remove-port"
+                            disabled={loading || !isConnected || !selectedDevice || commandInProgressRef.current}
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        )}
                       </div>
-                      <div className="form-group">
-                        <label className="form-label">VTP Password</label>
-                        <input
-                          type="password"
-                          value={vtpConfig.password}
-                          onChange={(e) => setVtpConfig({ ...vtpConfig, password: e.target.value })}
-                          className="form-input"
-                          placeholder="Enter VTP password"
-                          disabled={loading || !isConnected}
-                        />
-                      </div>
-                      <div className="form-group">
-                        <label className="form-label">VTP Mode</label>
-                        <select
-                          value={vtpConfig.mode}
-                          onChange={(e) => setVtpConfig({ ...vtpConfig, mode: e.target.value })}
-                          className="form-select"
-                          disabled={loading || !isConnected}
-                        >
-                          <option value="server">Server</option>
-                          <option value="client">Client</option>
-                          <option value="transparent">Transparent</option>
-                        </select>
-                      </div>
-                      
-                      <div className="config-preview">
-                        <h4>Configuration Preview</h4>
-                        <div className="preview-content">
-                          <div className="preview-row">
-                            <span className="preview-label">Target Machines:</span>
-                            <span className="preview-value">{markedMachines.length} machines</span>
-                          </div>
-                          <div className="preview-row">
-                            <span className="preview-label">Domain Name:</span>
-                            <span className="preview-value">{vtpConfig.domainName || 'Not set'}</span>
-                          </div>
-                          <div className="preview-row">
-                            <span className="preview-label">Mode:</span>
-                            <span className="preview-value">{vtpConfig.mode || 'Not set'}</span>
-                          </div>
-                          <div className="preview-row">
-                            <span className="preview-label">Operation:</span>
-                            <span className="preview-value">Configure VTP on all marked machines</span>
-                          </div>
+                      <div className="port-input-row">
+                        <div className="port-input-field">
+                          <label className="form-label">
+                            Interface Name
+                            <span className="form-hint">(e.g., GigabitEthernet0/1)</span>
+                          </label>
+                          <input
+                            type="text"
+                            value={port.interfaceName}
+                            onChange={(e) => updatePort(index, 'interfaceName', e.target.value)}
+                            className="form-input"
+                            placeholder="Enter interface name"
+                            disabled={loading || !isConnected || !selectedDevice || commandInProgressRef.current}
+                          />
+                        </div>
+                        <div className="port-input-field">
+                          <label className="form-label">Mode</label>
+                          <select
+                            value={port.mode}
+                            onChange={(e) => updatePort(index, 'mode', e.target.value)}
+                            className="form-select"
+                            disabled={loading || !isConnected || !selectedDevice || commandInProgressRef.current}
+                          >
+                            <option value="access">Access</option>
+                            <option value="trunk">Trunk</option>
+                          </select>
                         </div>
                       </div>
                       
-                      <button
-                        onClick={handleConfigureVtp}
-                        className="form-button"
-                        disabled={loading || !isConnected || !vtpConfig.domainName || !vtpConfig.password}
-                      >
-                        {loading ? 'Configuring VTP...' : 'Configure VTP on All Machines'}
-                      </button>
-                    </>
-                  )}
+                      {port.mode === 'access' && (
+                        <div className="port-input-row">
+                          <div className="port-input-field">
+                            <label className="form-label">
+                              VLAN ID
+                              <span className="form-hint">(1-4094)</span>
+                            </label>
+                            <input
+                              type="number"
+                              value={port.vlanId}
+                              onChange={(e) => updatePort(index, 'vlanId', e.target.value)}
+                              className="form-input"
+                              placeholder="Enter VLAN ID"
+                              min="1"
+                              max="4094"
+                              disabled={loading || !isConnected || !selectedDevice || commandInProgressRef.current}
+                            />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                  
+                  <div className="port-actions">
+                    <button
+                      onClick={addPort}
+                      className="btn-add-port"
+                      disabled={loading || !isConnected || !selectedDevice || ports.length >= 10 || commandInProgressRef.current}
+                    >
+                      <Plus size={16} />
+                      Add Another Port
+                    </button>
+                    <span className="port-count">
+                      {ports.length} port(s) configured
+                    </span>
+                  </div>
+                  
+                  <div className="config-preview">
+                    <h4>Configuration Preview</h4>
+                    <div className="preview-content">
+                      <div className="preview-row">
+                        <span className="preview-label">Device:</span>
+                        <span className="preview-value">
+                          {selectedDeviceData?.name || selectedDeviceData?.device_name || 'Not selected'}
+                        </span>
+                      </div>
+                      <div className="preview-row">
+                        <span className="preview-label">Switch IP:</span>
+                        <span className="preview-value">{selectedDeviceData?.ip || selectedDeviceData?.device_ip || 'Not selected'}</span>
+                      </div>
+                      <div className="preview-row">
+                        <span className="preview-label">Device Status:</span>
+                        <span className="preview-value">
+                          {deviceStatus === 'up' ? (
+                            <span className="status-up">✓ Reachable</span>
+                          ) : deviceStatus === 'down' ? (
+                            <span className="status-down">✗ Not Reachable</span>
+                          ) : deviceStatus === 'checking' ? (
+                            <span className="status-checking">Checking...</span>
+                          ) : (
+                            <span className="status-unknown">Unknown</span>
+                          )}
+                        </span>
+                      </div>
+                      <div className="preview-row">
+                        <span className="preview-label">Ports to Configure:</span>
+                        <span className="preview-value">
+                          {ports.filter(p => p.interfaceName && p.mode).length > 0 
+                            ? ports.filter(p => p.interfaceName && p.mode).map((p, i) => 
+                                `${p.interfaceName} (${p.mode}${p.mode === 'access' && p.vlanId ? `, VLAN ${p.vlanId}` : ''})`
+                              ).join(', ')
+                            : 'No ports configured'
+                          }
+                        </span>
+                      </div>
+                      <div className="preview-row">
+                        <span className="preview-label">Operation:</span>
+                        <span className="preview-value">Change port mode using stored credentials</span>
+                      </div>
+                    </div>
+                  </div>
+                  
+                  <button
+                    onClick={handleConfigurePorts}
+                    className="form-button"
+                    disabled={loading || !isConnected || !selectedDevice || ports.filter(p => p.interfaceName && p.mode && (p.mode !== 'access' || p.vlanId)).length === 0 || commandInProgressRef.current}
+                  >
+                    {loading ? 'Configuring Ports...' : 'Configure Ports'}
+                  </button>
                 </div>
               </div>
             )}
@@ -709,18 +1861,61 @@ const Switch = () => {
                 Connect to backend to configure switch settings
               </div>
             )}
+            
+            {isConnected && selectedDevice && deviceStatus === 'down' && (
+              <div className="device-down-warning">
+                <div className="warning-content">
+                  <AlertCircle size={20} />
+                  <div className="warning-text">
+                    <h4>Device Not Reachable</h4>
+                    <p>The selected device is not reachable. Configuration commands may fail.</p>
+                    <button 
+                      onClick={checkDeviceStatus}
+                      className="btn-check-again"
+                      disabled={deviceStatusLoading || commandInProgressRef.current}
+                    >
+                      {deviceStatusLoading ? 'Checking...' : 'Check Again'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>
 
-      <MarkMachineModal />
+      <NoDevicesModal />
+      <DeviceDownModal />
 
       {error && (
         <div className="error-message-global">
-          <div className="error-text">{error}</div>
+          <div className="error-text">
+            {error}
+            {error.includes('No password found') && (
+              <div style={{ marginTop: '8px', fontSize: '14px' }}>
+                <button 
+                  className="btn-add-device"
+                  onClick={() => window.location.href = '/network-management'}
+                  style={{ padding: '4px 8px', marginRight: '8px' }}
+                  disabled={commandInProgressRef.current}
+                >
+                  Go to Network Management
+                </button>
+                <button 
+                  className="btn-refresh"
+                  onClick={handleRefreshDevices}
+                  style={{ padding: '4px 8px' }}
+                  disabled={commandInProgressRef.current}
+                >
+                  Refresh Devices
+                </button>
+              </div>
+            )}
+          </div>
           <button 
             className="btn-close-error" 
             onClick={() => setError(null)}
+            disabled={commandInProgressRef.current}
           >
             ×
           </button>
@@ -733,6 +1928,7 @@ const Switch = () => {
           <button 
             className="btn-close-success" 
             onClick={() => setSuccessMessage(null)}
+            disabled={commandInProgressRef.current}
           >
             ×
           </button>

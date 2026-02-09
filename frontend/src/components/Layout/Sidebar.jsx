@@ -17,7 +17,8 @@ const Sidebar = ({ onItemClick }) => {
     { id: 'switch', label: 'Switch', path: '/switch' },
     { id: 'machine-management', label: 'Machine Management', path: '/machine-management' },
     { id: 'active-directory', label: 'Active Directory', path: '/active-directory' },
-    { id: 'routing', label: 'Routing', path: '/routing' }
+    { id: 'routing', label: 'Routing', path: '/routing' },
+    { id: 'network-management', label: 'Network Management', path: '/network-management' }
   ];
 
   const isActive = (path) => {

@@ -549,3 +549,248 @@
   font-size: 14px;
   line-height: 1.5;
 }
+
+/* Add these styles to your existing MachineManagement.css */
+
+.page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+  gap: 15px;
+}
+
+.header-badges {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.marked-badge {
+  background-color: #27ae60;
+  color: white;
+  padding: 5px 12px;
+  border-radius: 20px;
+  font-size: 14px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.unmarked-badge {
+  background-color: #e74c3c;
+  color: white;
+  padding: 5px 12px;
+  border-radius: 20px;
+  font-size: 14px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.total-badge {
+  background-color: #3498db;
+  color: white;
+  padding: 5px 12px;
+  border-radius: 20px;
+  font-size: 14px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.api-status-badge {
+  padding: 5px 12px;
+  border-radius: 20px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.api-status-badge.success {
+  background-color: #27ae60;
+  color: white;
+}
+
+.api-status-badge.error {
+  background-color: #e74c3c;
+  color: white;
+}
+
+.machine-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 15px;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.machine-title {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.machine-status-badges {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.machine-roles-badges {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+.role-badge {
+  padding: 3px 8px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.role-badge.dhcp {
+  background-color: #3498db;
+  color: white;
+}
+
+.role-badge.dns {
+  background-color: #9b59b6;
+  color: white;
+}
+
+.role-badge.ad {
+  background-color: #e67e22;
+  color: white;
+}
+
+.status.marked {
+  background-color: #27ae60;
+  color: white;
+  padding: 3px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.status.available {
+  background-color: #7f8c8d;
+  color: white;
+  padding: 3px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.current-marks ul {
+  list-style: none;
+  padding: 0;
+  margin: 5px 0 0 0;
+}
+
+.current-marks li {
+  padding: 5px 10px;
+  margin-bottom: 5px;
+  border-radius: 5px;
+  background-color: #f8f9fa;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.mark-role {
+  font-weight: 600;
+  text-transform: uppercase;
+  font-size: 12px;
+}
+
+.mark-type {
+  font-size: 11px;
+  color: #666;
+  font-style: italic;
+}
+
+.mark-dhcp .mark-role {
+  color: #2980b9;
+}
+
+.mark-dns .mark-role {
+  color: #8e44ad;
+}
+
+.mark-ad .mark-role {
+  color: #d35400;
+}
+
+.marked-count-badge {
+  background-color: #27ae60;
+  color: white;
+  padding: 4px 10px;
+  border-radius: 15px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* Retry actions */
+.retry-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.retry-button-small {
+  padding: 5px 15px;
+  background-color: #3498db;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.retry-button-small:hover {
+  background-color: #2980b9;
+}
+
+.debug-button-small {
+  padding: 5px 15px;
+  background-color: #7f8c8d;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.debug-button-small:hover {
+  background-color: #666;
+}
+
+/* Loading state */
+.loading-machines {
+  text-align: center;
+  padding: 40px;
+  background-color: #f8f9fa;
+  border-radius: 8px;
+}
+
+.loader {
+  border: 4px solid #f3f3f3;
+  border-top: 4px solid #3498db;
+  border-radius: 50%;
+  width: 40px;
+  height: 40px;
+  animation: spin 1s linear infinite;
+  margin: 20px auto;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}

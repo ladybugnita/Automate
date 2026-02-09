@@ -590,3 +590,170 @@
     min-height: 400px;
   }
 }
+
+
+
+
+
+/* Mini CPU Graph Styles */
+.cpu-cell-with-graph {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+}
+
+.cpu-graph-container {
+  flex: 1;
+  min-width: 120px;
+  max-width: 150px;
+}
+
+.cpu-stats {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  min-width: 60px;
+}
+
+.cpu-value-main {
+  font-size: 16px;
+  font-weight: 600;
+  color: #333;
+  margin-bottom: 2px;
+}
+
+.cpu-cores {
+  font-size: 12px;
+  color: #666;
+  background: #f0f0f0;
+  padding: 2px 6px;
+  border-radius: 10px;
+}
+
+.mini-cpu-graph {
+  background: #fff;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  padding: 8px;
+  height: 100%;
+}
+
+.mini-graph-container {
+  position: relative;
+  height: 60px;
+  margin-bottom: 5px;
+}
+
+.mini-graph-bars {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  height: 40px;
+  padding: 0 5px;
+}
+
+.mini-bar-container {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  height: 100%;
+  position: relative;
+}
+
+.mini-bar {
+  width: 8px;
+  border-radius: 3px 3px 0 0;
+  transition: height 0.3s ease;
+  position: relative;
+}
+
+.mini-bar.low {
+  background: linear-gradient(to top, #4CAF50, #8BC34A);
+}
+
+.mini-bar.medium {
+  background: linear-gradient(to top, #FF9800, #FFB74D);
+}
+
+.mini-bar.high {
+  background: linear-gradient(to top, #F44336, #E57373);
+}
+
+.mini-bar-value {
+  position: absolute;
+  top: -20px;
+  font-size: 10px;
+  font-weight: 500;
+  color: #666;
+  white-space: nowrap;
+}
+
+.mini-graph-labels {
+  display: flex;
+  justify-content: space-between;
+  padding: 0 3px;
+  margin-top: 5px;
+}
+
+.mini-label {
+  font-size: 9px;
+  color: #888;
+  transform: rotate(-45deg);
+  transform-origin: center;
+  display: inline-block;
+}
+
+.mini-graph-footer {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding-top: 5px;
+  border-top: 1px solid #f0f0f0;
+}
+
+.current-cpu-value-mini {
+  font-size: 12px;
+  color: #666;
+}
+
+.cpu-value-highlight {
+  font-weight: 600;
+  color: #333;
+}
+
+/* Adjust table cells for new layout */
+.machines-table td {
+  vertical-align: middle;
+}
+
+/* Responsive adjustments */
+@media (max-width: 1400px) {
+  .cpu-graph-container {
+    min-width: 100px;
+    max-width: 130px;
+  }
+  
+  .mini-bar {
+    width: 6px;
+  }
+}
+
+@media (max-width: 1200px) {
+  .cpu-cell-with-graph {
+    flex-direction: column;
+    gap: 8px;
+    align-items: flex-start;
+  }
+  
+  .cpu-graph-container {
+    max-width: 100%;
+    width: 100%;
+  }
+  
+  .cpu-stats {
+    flex-direction: row;
+    gap: 10px;
+    align-items: center;
+  }
+}

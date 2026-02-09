@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback, useRef } from 'react';
+import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { useWebSocket } from '../../context/WebSocketContext';
 import './EventViewer.css';
 
@@ -43,25 +43,43 @@ const EventViewer = () => {
         application: [],
         security: []
     });
-    const [loading, setLoading] = useState(true);
+    const [loading, setLoading] = useState(false); // Changed to false initially
     const [selectedCategory, setSelectedCategory] = useState('system');
     const [autoRefresh, setAutoRefresh] = useState(false);
     const [lastUpdated, setLastUpdated] = useState(null);
     const [markedMachines, setMarkedMachines] = useState([]);
     const [machinesLoading, setMachinesLoading] = useState(true);
     const [showMarkModal, setShowMarkModal] = useState(false);
-    const [selectedMachine, setSelectedMachine] = useState('');
+    const [selectedMachine, setSelectedMachine] = useState(''); // Empty by default
     const [error, setError] = useState(null);
+    const [showSelectMessage, setShowSelectMessage] = useState(true); // New state for showing select message
     
     const isFetchingRef = useRef(false);
     const timeoutRef = useRef(null);
     const machineInfoListenerRef = useRef(false);
+    const fetchInProgressRef = useRef(false);
+    const mountedRef = useRef(false);
 
     const navItems = [
         'Dashboard', 'DNS Configuration', 'Event Viewer', 'DHCP', 'Users', 
         'Resource Monitor', 'ESXi', 'Switch', 'Machine Management', 
         'Active Directory', 'Routing'
     ];
+
+    // Get the API base URL dynamically - memoized to prevent recreation
+    const API_BASE_URL = useMemo(() => {
+        if (typeof window !== 'undefined') {
+            const currentHost = window.location.hostname;
+            const currentPort = window.location.port;
+            
+            if (currentHost === 'localhost' || currentHost === '127.0.0.1') {
+                return `http://${currentHost}:5000`;
+            } else {
+                return `http://${currentHost}:5000`;
+            }
+        }
+        return 'http://localhost:5000';
+    }, []);
 
     const extractResult = (responseData) => {
         if (!responseData) return null;
@@ -77,63 +95,33 @@ const EventViewer = () => {
         return responseData;
     };
 
-    const fetchMachineInfo = useCallback(() => {
-        console.log('Event Viewer: Fetching ALL machines from database...');
-        setMachinesLoading(true);
-        setError(null);
-        
-        sendCommand('get_machine_info', {});
-    }, [sendCommand]);
-
-    const processMachineInfo = useCallback((machines) => {
-        console.log('Event Viewer: Processing ALL machines info:', machines);
-        
-        if (!machines || !Array.isArray(machines)) {
-            console.error('Event Viewer: Invalid machine data received:', machines);
-            setError('Invalid machine data received from server');
-            setMachinesLoading(false);
-            return;
-        }
-
-        const markedMachinesList = machines.filter(machine => {
-            return machine.marked_as && 
-                   Array.isArray(machine.marked_as) && 
-                   machine.marked_as.length > 0;
-        });
-
-        console.log(`Event Viewer: Found ${markedMachinesList.length} marked machines:`, markedMachinesList);
-        setMarkedMachines(markedMachinesList);
-        
-        setMachinesLoading(false);
-        
-        if (markedMachinesList.length > 0) {
-            console.log('Event Viewer: Automatically fetching events for all marked machines');
-            fetchEventDataForAllMachines(markedMachinesList);
-        } else {
-            setShowMarkModal(true);
-        }
-    }, []);
-
-    const getWindowsInfoForMachine = (machine) => {
+    const getWindowsInfoForMachine = useCallback((machine) => {
         if (!machine) {
             console.error('Event Viewer: No machine provided to getWindowsInfoForMachine');
             return null;
         }
         
-        console.log(`Event Viewer: Getting Windows info for machine: ${machine.name} (${machine.ip})`);
+        console.log(`Event Viewer: Getting Windows info for machine: ${machine.name || 'Unknown'} (${machine.ip})`);
         
-        if (!machine.password) {
-            console.error('Event Viewer: No password found for machine:', machine.name);
-            setError(`No password found for machine: ${machine.name}`);
+        // Check for password in different possible fields
+        const password = machine.password || machine.password_provided || '';
+        
+        console.log(`Event Viewer: Password for machine ${machine.name || machine.ip}:`, password ? '***HIDDEN***' : 'NOT FOUND');
+        console.log('Event Viewer: Machine object keys:', Object.keys(machine));
+        
+        if (!password) {
+            console.error('Event Viewer: No password found for machine:', machine.name || machine.ip);
+            console.error('Event Viewer: Full machine object:', machine);
+            setError(`No password found for machine: ${machine.name || machine.ip}. Please check machine credentials in Machine Management.`);
             return null;
         }
         
         return {
             ip: machine.ip,
-            username: machine.username || 'admin',
-            password: machine.password
+            username: machine.username || machine.username_provided || 'admin',
+            password: password
         };
-    };
+    }, []);
 
     const createEventViewerPayloadForSingleMachine = useCallback((machine) => {
         if (!machine) {
@@ -147,13 +135,12 @@ const EventViewer = () => {
             return null;
         }
         
-        console.log(`Event Viewer: Creating payload for single machine: ${machine.name}`);
+        console.log(`Event Viewer: Creating payload for single machine: ${machine.name || 'Unknown'} (${machine.ip})`);
         
-        // Send only credentials, not log_name
         return {
             windows_info: windowsInfo
         };
-    }, []);
+    }, [getWindowsInfoForMachine]);
 
     const createEventViewerPayloadForAllMachines = useCallback((machines) => {
         if (!machines || machines.length === 0) {
@@ -168,52 +155,47 @@ const EventViewer = () => {
             const windowsInfo = getWindowsInfoForMachine(machine);
             if (windowsInfo) {
                 windowsInfos.push(windowsInfo);
+            } else {
+                console.error(`Event Viewer: Failed to get Windows info for machine: ${machine.name || 'Unknown'} (${machine.ip})`);
             }
         });
         
         if (windowsInfos.length === 0) {
             console.error('Event Viewer: Failed to get Windows info for any marked machine');
-            setError('Failed to get credentials for marked machines');
+            setError('Failed to get credentials for marked machines. Please check that all marked machines have valid credentials in Machine Management.');
             return null;
         }
         
         console.log(`Event Viewer: Creating payload for ${windowsInfos.length} machine(s)`);
         
-        // Send only credentials, not log_name
         return {
             windows_infos: windowsInfos
         };
-    }, []);
+    }, [getWindowsInfoForMachine]);
 
-    const categorizeEvent = (event) => {
-        // Try to get log name from various possible fields
+    const categorizeEvent = useCallback((event) => {
         const logName = event.LogName || event.log_name || event.Log || '';
         const logNameLower = logName.toLowerCase();
         
-        // Also check ProviderName or Source which might indicate the log type
         const provider = event.ProviderName || event.provider || '';
         const providerLower = provider.toLowerCase();
         
-        // Check for security-related indicators
         const eventId = event.EventID || event.EventId || event.Id || '';
         
-        // Security events often have specific Event IDs or providers
         if (logNameLower.includes('security') || 
             providerLower.includes('security') ||
             providerLower.includes('audit') ||
-            (eventId >= 4600 && eventId <= 4699) || // Windows security event range
+            (eventId >= 4600 && eventId <= 4699) ||
             providerLower.includes('microsoft-windows-security-auditing')) {
             return 'security';
         }
         
-        // Application events
         if (logNameLower.includes('application') || 
             providerLower.includes('application') ||
             (!logNameLower.includes('system') && !logNameLower.includes('security'))) {
             return 'application';
         }
         
-        // System events (default)
         if (logNameLower.includes('system') || 
             logName === '' || 
             providerLower.includes('system') ||
@@ -221,11 +203,316 @@ const EventViewer = () => {
             return 'system';
         }
         
-        // Default to system if can't determine
         return 'system';
-    };
+    }, []);
+
+    const fetchEventDataForSingleMachine = useCallback((machine) => {
+        if (isFetchingRef.current || !mountedRef.current) {
+            console.log('Event Viewer: Already fetching event data or component unmounted, skipping...');
+            return;
+        }
+
+        if (!isConnected) {
+            console.log('Event Viewer: WebSocket not connected');
+            setError('Not connected to backend system');
+            setLoading(false);
+            return;
+        }
+
+        console.log(`Event Viewer: Fetching events for single machine: ${machine.name || 'Unknown'} (${machine.ip})`);
+        setLoading(true);
+        setError(null);
+        setShowSelectMessage(false); // Hide select message when fetching
+        isFetchingRef.current = true;
+        
+        const payload = createEventViewerPayloadForSingleMachine(machine);
+        if (!payload) {
+            setLoading(false);
+            isFetchingRef.current = false;
+            return;
+        }
+        
+        console.log('Event Viewer: Sending payload (credentials only, no log_name):', {
+            ...payload,
+            windows_info: { ...payload.windows_info, password: '***HIDDEN***' }
+        });
+        sendCommand('get_event_viewer_data', payload);
+
+        // Clear any existing timeout
+        if (timeoutRef.current) {
+            clearTimeout(timeoutRef.current);
+        }
+        
+        timeoutRef.current = setTimeout(() => {
+            if (isFetchingRef.current && mountedRef.current) {
+                console.log('Event Viewer: Timeout: No response from backend for event data');
+                setError('Timeout: No response from server');
+                setLoading(false);
+                isFetchingRef.current = false;
+                timeoutRef.current = null;
+            }
+        }, 30000);
+    }, [isConnected, sendCommand, createEventViewerPayloadForSingleMachine]);
+
+    const fetchEventDataForAllMachines = useCallback((machines) => {
+        if (isFetchingRef.current || !mountedRef.current) {
+            console.log('Event Viewer: Already fetching event data or component unmounted, skipping...');
+            return;
+        }
+
+        if (!isConnected) {
+            console.log('Event Viewer: WebSocket not connected');
+            setError('Not connected to backend system');
+            setLoading(false);
+            return;
+        }
+
+        const machinesToUse = machines || markedMachines;
+        
+        if (!machinesToUse || machinesToUse.length === 0) {
+            console.log('Event Viewer: No marked machines found');
+            setError('No marked machines found. Please mark machines as DNS, DHCP, or AD in Machine Management first.');
+            setLoading(false);
+            return;
+        }
+
+        console.log(`Event Viewer: Fetching events for ${machinesToUse.length} marked machine(s)...`);
+        setLoading(true);
+        setError(null);
+        setShowSelectMessage(false); // Hide select message when fetching
+        isFetchingRef.current = true;
+        
+        const payload = createEventViewerPayloadForAllMachines(machinesToUse);
+        if (!payload) {
+            setLoading(false);
+            isFetchingRef.current = false;
+            return;
+        }
+        
+        console.log('Event Viewer: Sending payload (credentials only, no log_name):', {
+            ...payload,
+            windows_infos: payload.windows_infos.map(info => ({ ...info, password: '***HIDDEN***' }))
+        });
+        sendCommand('get_event_viewer_data', payload);
+
+        // Clear any existing timeout
+        if (timeoutRef.current) {
+            clearTimeout(timeoutRef.current);
+        }
+        
+        timeoutRef.current = setTimeout(() => {
+            if (isFetchingRef.current && mountedRef.current) {
+                console.log('Event Viewer: Timeout: No response from backend for event data');
+                setError('Timeout: No response from server');
+                setLoading(false);
+                isFetchingRef.current = false;
+                timeoutRef.current = null;
+            }
+        }, 30000);
+    }, [isConnected, markedMachines, sendCommand, createEventViewerPayloadForAllMachines]);
+
+    const processMachineInfo = useCallback((machines) => {
+        if (!mountedRef.current) return;
+        
+        console.log('Event Viewer: Processing ALL machines info via WebSocket:', machines);
+        
+        if (!machines) {
+            console.error('Event Viewer: No machine data received');
+            setError('No machine data received from server');
+            setMachinesLoading(false);
+            return;
+        }
+        
+        let machinesArray = [];
+        if (Array.isArray(machines)) {
+            machinesArray = machines;
+        } else if (machines.machines && Array.isArray(machines.machines)) {
+            machinesArray = machines.machines;
+        } else if (machines.data && Array.isArray(machines.data)) {
+            machinesArray = machines.data;
+        } else if (typeof machines === 'object') {
+            machinesArray = Object.values(machines).filter(item => 
+                item && typeof item === 'object' && item.ip
+            );
+        }
+        
+        console.log('Event Viewer: Processed machines array:', machinesArray);
+
+        const markedMachinesList = machinesArray.filter(machine => {
+            return machine.marked_as && 
+                   Array.isArray(machine.marked_as) && 
+                   machine.marked_as.length > 0;
+        });
+
+        console.log(`Event Viewer: Found ${markedMachinesList.length} marked machines via WebSocket:`, markedMachinesList);
+        setMarkedMachines(markedMachinesList);
+        
+        setMachinesLoading(false);
+        
+        // Don't automatically fetch events anymore - wait for user selection
+        // Show select message if there are marked machines
+        if (markedMachinesList.length > 0) {
+            setShowSelectMessage(true);
+        } else {
+            setShowMarkModal(true);
+        }
+        
+        // Reset fetch in progress
+        fetchInProgressRef.current = false;
+    }, []);
+
+    const fetchMachineInfo = useCallback(async () => {
+        if (fetchInProgressRef.current || !mountedRef.current) {
+            console.log('Event Viewer: Fetch already in progress or component unmounted');
+            return;
+        }
+        
+        fetchInProgressRef.current = true;
+        console.log('Event Viewer: Fetching machines from Node.js REST API...');
+        console.log('API Base URL:', API_BASE_URL);
+        setMachinesLoading(true);
+        setError(null);
+        
+        try {
+            const token = localStorage.getItem('token');
+            if (!token) {
+                throw new Error('No authentication token found');
+            }
+            
+            // FIX: We need to get machines WITH passwords
+            // Try different endpoints that might include passwords
+            
+            // Option 1: Try with include_password=true parameter
+            console.log('Event Viewer: Trying to fetch machines WITH passwords...');
+            
+            // First, let's try the standard endpoint but we need to see what endpoints are available
+            // Based on your logs, try /api/machines/get-machines first
+            const response = await fetch(`${API_BASE_URL}/api/machines/get-machines?include_password=true`, {
+                method: 'GET',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                }
+            });
+            
+            if (!response.ok) {
+                console.log('Event Viewer: Endpoint with password parameter failed, trying without parameter...');
+                
+                // Try without parameter
+                const response2 = await fetch(`${API_BASE_URL}/api/machines/get-machines`, {
+                    method: 'GET',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+                
+                if (!response2.ok) {
+                    throw new Error(`Failed to fetch machines: ${response2.status} ${response2.statusText}`);
+                }
+                
+                const data = await response2.json();
+                console.log('Event Viewer: Received machines from /api/machines/get-machines:', data);
+                await processMachineData(data);
+                return;
+            }
+            
+            const data = await response.json();
+            console.log('Event Viewer: Received machines from /api/machines/get-machines?include_password=true:', data);
+            await processMachineData(data);
+            
+        } catch (err) {
+            console.error('Event Viewer: REST API failed:', err);
+            if (mountedRef.current) {
+                setError(`Failed to fetch machines: ${err.message}. Please check if machines are properly configured.`);
+                setMachinesLoading(false);
+            }
+            
+            // Fallback to WebSocket only if component is still mounted
+            if (mountedRef.current && isConnected) {
+                console.log('Event Viewer: Falling back to WebSocket for get_machine_info');
+                sendCommand('get_machine_info', {});
+            }
+        } finally {
+            fetchInProgressRef.current = false;
+        }
+        
+        async function processMachineData(data) {
+            // Process the data - adjust based on your API response structure
+            let machines = [];
+            if (data.machines && Array.isArray(data.machines)) {
+                machines = data.machines;
+            } else if (data.data && Array.isArray(data.data)) {
+                machines = data.data;
+            } else if (Array.isArray(data)) {
+                machines = data;
+            }
+            
+            console.log('Event Viewer: Total machines found:', machines.length);
+            
+            if (machines.length > 0) {
+                console.log('Event Viewer: First machine sample:', {
+                    id: machines[0].id,
+                    name: machines[0].name,
+                    ip: machines[0].ip,
+                    hasPassword: !!(machines[0].password || machines[0].password_provided),
+                    hasUsername: !!(machines[0].username || machines[0].username_provided),
+                    marked_as: machines[0].marked_as
+                });
+            }
+            
+            // Filter for marked machines
+            const markedMachinesList = machines.filter(machine => {
+                const hasMarks = machine.marked_as && 
+                               Array.isArray(machine.marked_as) && 
+                               machine.marked_as.length > 0;
+                
+                if (hasMarks) {
+                    console.log(`Event Viewer: Found marked machine: ${machine.name || 'Unknown'} (${machine.ip})`, {
+                        id: machine.id,
+                        hasPassword: !!(machine.password || machine.password_provided),
+                        hasUsername: !!(machine.username || machine.username_provided),
+                        marks: machine.marked_as
+                    });
+                }
+                
+                return hasMarks;
+            });
+            
+            console.log(`Event Viewer: Found ${markedMachinesList.length} marked machines:`, markedMachinesList);
+            
+            // Check if passwords are available
+            const machinesWithPasswords = markedMachinesList.filter(machine => {
+                const hasPassword = machine.password || machine.password_provided;
+                if (!hasPassword) {
+                    console.warn(`Event Viewer: Machine ${machine.name || 'Unknown'} (${machine.ip}) has no password`);
+                    console.warn('Event Viewer: Machine object:', machine);
+                }
+                return hasPassword;
+            });
+            
+            if (markedMachinesList.length === 0) {
+                console.log('Event Viewer: No marked machines found');
+                setShowMarkModal(true);
+            } else if (machinesWithPasswords.length === 0) {
+                console.error('Event Viewer: No marked machines have passwords');
+                setError('Marked machines found but no passwords available. Please check machine credentials in Machine Management.');
+                setShowMarkModal(true);
+            } else {
+                // Show select message when machines are loaded
+                setShowSelectMessage(true);
+            }
+            
+            setMarkedMachines(markedMachinesList);
+            setMachinesLoading(false);
+            
+            // Don't automatically fetch events - wait for user selection
+        }
+    }, [API_BASE_URL, isConnected, sendCommand]);
 
     const handleWebSocketMessage = useCallback((data) => {
+        if (!mountedRef.current) return;
+        
         console.log('Event Viewer WebSocket message:', data);
         
         let command, result, error, payload;
@@ -277,12 +564,14 @@ const EventViewer = () => {
         
         switch(command) {
             case 'get_machine_info':
-                console.log('Event Viewer: Received machine info');
-                if (responseData && responseData.machines) {
-                    processMachineInfo(responseData.machines);
-                } else if (responseData && responseData.success === false) {
-                    setError(responseData.error || 'Failed to fetch machine info');
+                console.log('Event Viewer: Received machine info via WebSocket fallback');
+                if (responseData && responseData.machines && responseData.machines.length > 0) {
+                    processMachineInfo(responseData);
+                } else {
+                    console.log('Event Viewer: No machines found via WebSocket');
+                    setMarkedMachines([]);
                     setMachinesLoading(false);
+                    setShowMarkModal(true);
                 }
                 break;
                 
@@ -303,14 +592,11 @@ const EventViewer = () => {
                 if (eventData) {
                     console.log('Event Viewer: Loaded event viewer data:', eventData);
                     
-                    // Initialize event arrays
                     const systemEvents = [];
                     const applicationEvents = [];
                     const securityEvents = [];
                     
-                    // Process events based on data structure
                     if (Array.isArray(eventData)) {
-                        // Direct array of events
                         eventData.forEach(event => {
                             const enhancedEvent = {
                                 ...event,
@@ -318,7 +604,6 @@ const EventViewer = () => {
                                 machineIp: event.machine_ip || event.machineIp || 'Unknown'
                             };
                             
-                            // Categorize the event
                             const category = categorizeEvent(event);
                             
                             if (category === 'system') {
@@ -330,9 +615,7 @@ const EventViewer = () => {
                             }
                         });
                     } else if (typeof eventData === 'object') {
-                        // Could be object with categories or machine-based grouping
                         if (eventData.system || eventData.application || eventData.security) {
-                            // Already categorized
                             if (eventData.system && Array.isArray(eventData.system)) {
                                 eventData.system.forEach(event => {
                                     const enhancedEvent = {
@@ -364,7 +647,6 @@ const EventViewer = () => {
                                 });
                             }
                         } else {
-                            // Might be grouped by machine IP or other keys
                             Object.keys(eventData).forEach(key => {
                                 const eventsList = eventData[key];
                                 if (Array.isArray(eventsList)) {
@@ -375,7 +657,6 @@ const EventViewer = () => {
                                             machineIp: event.machine_ip || event.machineIp || 'Unknown'
                                         };
                                         
-                                        // Categorize the event
                                         const category = categorizeEvent(event);
                                         
                                         if (category === 'system') {
@@ -420,92 +701,7 @@ const EventViewer = () => {
             default:
                 console.log(`Event Viewer: Unhandled command: ${command}`);
         }
-    }, [processMachineInfo]);
-
-    const fetchEventDataForSingleMachine = useCallback((machine) => {
-        if (isFetchingRef.current) {
-            console.log('Event Viewer: Already fetching event data, skipping...');
-            return;
-        }
-
-        if (!isConnected) {
-            console.log('Event Viewer: WebSocket not connected');
-            setError('Not connected to backend system');
-            setLoading(false);
-            return;
-        }
-
-        console.log(`Event Viewer: Fetching events for single machine: ${machine.name} (${machine.ip})`);
-        setLoading(true);
-        setError(null);
-        isFetchingRef.current = true;
-        
-        const payload = createEventViewerPayloadForSingleMachine(machine);
-        if (!payload) {
-            setLoading(false);
-            isFetchingRef.current = false;
-            return;
-        }
-        
-        console.log('Event Viewer: Sending payload (credentials only, no log_name):', payload);
-        sendCommand('get_event_viewer_data', payload);
-
-        timeoutRef.current = setTimeout(() => {
-            if (isFetchingRef.current) {
-                console.log('Event Viewer: Timeout: No response from backend for event data');
-                setError('Timeout: No response from server');
-                setLoading(false);
-                isFetchingRef.current = false;
-                timeoutRef.current = null;
-            }
-        }, 30000);
-    }, [isConnected, sendCommand, createEventViewerPayloadForSingleMachine]);
-
-    const fetchEventDataForAllMachines = useCallback((machines = markedMachines) => {
-        if (isFetchingRef.current) {
-            console.log('Event Viewer: Already fetching event data, skipping...');
-            return;
-        }
-
-        if (!isConnected) {
-            console.log('Event Viewer: WebSocket not connected');
-            setError('Not connected to backend system');
-            setLoading(false);
-            return;
-        }
-
-        if (!machines || machines.length === 0) {
-            console.log('Event Viewer: No marked machines found');
-            setError('No marked machines found. Please mark machines as DNS, DHCP, or AD in Machine Management first.');
-            setLoading(false);
-            return;
-        }
-
-        console.log(`Event Viewer: Fetching events for ${machines.length} marked machine(s)...`);
-        setLoading(true);
-        setError(null);
-        isFetchingRef.current = true;
-        
-        const payload = createEventViewerPayloadForAllMachines(machines);
-        if (!payload) {
-            setLoading(false);
-            isFetchingRef.current = false;
-            return;
-        }
-        
-        console.log('Event Viewer: Sending payload (credentials only, no log_name):', payload);
-        sendCommand('get_event_viewer_data', payload);
-
-        timeoutRef.current = setTimeout(() => {
-            if (isFetchingRef.current) {
-                console.log('Event Viewer: Timeout: No response from backend for event data');
-                setError('Timeout: No response from server');
-                setLoading(false);
-                isFetchingRef.current = false;
-                timeoutRef.current = null;
-            }
-        }, 30000);
-    }, [isConnected, markedMachines, sendCommand, createEventViewerPayloadForAllMachines]);
+    }, [processMachineInfo, categorizeEvent]);
 
     const handleMachineSelect = useCallback((machineIp) => {
         setSelectedMachine(machineIp);
@@ -516,9 +712,16 @@ const EventViewer = () => {
                 fetchEventDataForSingleMachine(machine);
             }
         } else {
-            fetchEventDataForAllMachines();
+            // When user selects "Select a machine" option, show the message again
+            setShowSelectMessage(true);
+            setEvents({
+                system: [],
+                application: [],
+                security: []
+            });
+            setLoading(false);
         }
-    }, [markedMachines, fetchEventDataForSingleMachine, fetchEventDataForAllMachines]);
+    }, [markedMachines, fetchEventDataForSingleMachine]);
 
     const getEventStats = () => {
         return {
@@ -553,16 +756,36 @@ const EventViewer = () => {
         } else {
             fetchEventDataForAllMachines();
         }
-    }, [isConnected, markedMachines.length, fetchEventDataForAllMachines, fetchEventDataForSingleMachine, isFetchingRef]);
+    }, [isConnected, markedMachines, fetchEventDataForAllMachines, fetchEventDataForSingleMachine]);
 
-    const handleRefreshMachines = () => {
+    const handleRefreshMachines = useCallback(() => {
         fetchMachineInfo();
-    };
+    }, [fetchMachineInfo]);
+
+    // Initialize on component mount
+    useEffect(() => {
+        console.log('Event Viewer Component Mounted');
+        mountedRef.current = true;
+        
+        // Fetch machines immediately on mount
+        fetchMachineInfo();
+        
+        return () => {
+            console.log('Event Viewer Component Unmounting');
+            mountedRef.current = false;
+            if (timeoutRef.current) {
+                clearTimeout(timeoutRef.current);
+                timeoutRef.current = null;
+            }
+            isFetchingRef.current = false;
+            fetchInProgressRef.current = false;
+        };
+    }, []);
 
     useEffect(() => {
-        if (autoRefresh && markedMachines.length > 0) {
+        if (autoRefresh && markedMachines.length > 0 && mountedRef.current) {
             const interval = setInterval(() => {
-                if (!isFetchingRef.current) {
+                if (!isFetchingRef.current && mountedRef.current) {
                     if (selectedMachine) {
                         const machine = markedMachines.find(m => m.ip === selectedMachine);
                         if (machine) {
@@ -579,13 +802,15 @@ const EventViewer = () => {
     }, [autoRefresh, fetchEventDataForSingleMachine, fetchEventDataForAllMachines, markedMachines, selectedMachine]);
 
     useEffect(() => {
-        if (!machineInfoListenerRef.current) {
-            console.log('Event Viewer Component Mounted - Setting up WebSocket listener');
+        if (!machineInfoListenerRef.current && mountedRef.current) {
+            console.log('Event Viewer: Setting up WebSocket listener');
             const removeListener = addListener(handleWebSocketMessage);
             machineInfoListenerRef.current = true;
             
             return () => {
-                if (removeListener) removeListener();
+                if (removeListener) {
+                    removeListener();
+                }
                 machineInfoListenerRef.current = false;
                 if (timeoutRef.current) {
                     clearTimeout(timeoutRef.current);
@@ -594,13 +819,6 @@ const EventViewer = () => {
             };
         }
     }, [addListener, handleWebSocketMessage]);
-
-    useEffect(() => {
-        if (isConnected && markedMachines.length === 0) {
-            console.log('Event Viewer: Connected, fetching machine info...');
-            fetchMachineInfo();
-        }
-    }, [isConnected, fetchMachineInfo, markedMachines.length]);
 
     const handleCategoryChange = (category) => {
         setSelectedCategory(category);
@@ -633,7 +851,7 @@ const EventViewer = () => {
     };
 
     const MarkMachineModal = () => {
-        if (!showMarkModal) return null;
+        if (!showMarkModal || machinesLoading) return null;
 
         const eventStats = getEventStats();
 
@@ -751,7 +969,7 @@ const EventViewer = () => {
                                 <button
                                     onClick={() => handleManualRefresh(selectedMachine)}
                                     className="refresh-button"
-                                    disabled={loading || !isConnected || isFetchingRef.current || markedMachines.length === 0}
+                                    disabled={loading || !isConnected || isFetchingRef.current || markedMachines.length === 0 || !selectedMachine}
                                 >
                                     {loading ? 'Refreshing...' : 'Refresh Events'}
                                 </button>
@@ -800,8 +1018,8 @@ const EventViewer = () => {
                                     >
                                         <option value="">Select a machine to view events...</option>
                                         {markedMachines.map(machine => (
-                                            <option key={machine.id} value={machine.ip}>
-                                                {machine.name} ({machine.ip}) - {getMachineRoles(machine)}
+                                            <option key={machine.id || machine.ip} value={machine.ip}>
+                                                {machine.name || 'Unknown'} ({machine.ip}) - {getMachineRoles(machine)}
                                             </option>
                                         ))}
                                     </select>
@@ -809,11 +1027,24 @@ const EventViewer = () => {
                             )}
                         </div>
 
+                        {showSelectMessage && !selectedMachine && markedMachines.length > 0 && (
+                            <div className="select-machine-message">
+                                <div className="select-message-content">
+                                    <div className="select-message-icon">ℹ️</div>
+                                    <div className="select-message-text">
+                                        <h3>Select a Machine to View Events</h3>
+                                        <p>Please select a machine from the dropdown above to view its Windows Event Viewer logs.</p>
+                                        <p>Once you select a machine, events will be fetched automatically.</p>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
                         {selectedMachine && (
                             <div className="selected-machine-info">
                                 <div className="selected-machine-header">
                                     <div className="selected-machine-name">
-                                        {markedMachines.find(m => m.ip === selectedMachine)?.name}
+                                        {markedMachines.find(m => m.ip === selectedMachine)?.name || 'Unknown'}
                                     </div>
                                     <button
                                         onClick={() => handleManualRefresh(selectedMachine)}
@@ -831,7 +1062,7 @@ const EventViewer = () => {
                                     <div className="machine-detail-item">
                                         <span className="detail-label">Username:</span>
                                         <span className="detail-value">
-                                            {markedMachines.find(m => m.ip === selectedMachine)?.username}
+                                            {markedMachines.find(m => m.ip === selectedMachine)?.username || 'Unknown'}
                                         </span>
                                     </div>
                                     <div className="machine-detail-item">
@@ -848,21 +1079,21 @@ const EventViewer = () => {
                             <button
                                 className={`category-tab ${selectedCategory === 'system' ? 'active' : ''}`}
                                 onClick={() => handleCategoryChange('system')}
-                                disabled={markedMachines.length === 0 || isFetchingRef.current}
+                                disabled={markedMachines.length === 0 || isFetchingRef.current || !selectedMachine}
                             >
                                 System Events ({events.system.length})
                             </button>
                             <button
                                 className={`category-tab ${selectedCategory === 'application' ? 'active' : ''}`}
                                 onClick={() => handleCategoryChange('application')}
-                                disabled={markedMachines.length === 0 || isFetchingRef.current}
+                                disabled={markedMachines.length === 0 || isFetchingRef.current || !selectedMachine}
                             >
                                 Application Events ({events.application.length})
                             </button>
                             <button
                                 className={`category-tab ${selectedCategory === 'security' ? 'active' : ''}`}
                                 onClick={() => handleCategoryChange('security')}
-                                disabled={markedMachines.length === 0 || isFetchingRef.current}
+                                disabled={markedMachines.length === 0 || isFetchingRef.current || !selectedMachine}
                             >
                                 Security Events ({events.security.length})
                             </button>
@@ -891,18 +1122,24 @@ const EventViewer = () => {
                                         </button>
                                     </div>
                                 </div>
+                            ) : !selectedMachine ? (
+                                <div className="select-machine-prompt">
+                                    <div className="prompt-content">
+                                        <div className="prompt-text">
+                                            <h3>No Machine Selected</h3>
+                                            <p>Please select a machine from the dropdown above to view its event logs.</p>
+                                            <p>Available machines: {markedMachines.length}</p>
+                                        </div>
+                                    </div>
+                                </div>
                             ) : loading ? (
                                 <div className="loading-message">
                                     <div className="loading-spinner"></div>
-                                    Loading event data from {selectedMachine ? 
-                                        `${markedMachines.find(m => m.ip === selectedMachine)?.name}` : 
-                                        `${markedMachines.length} machine(s)`}...
+                                    Loading event data from {markedMachines.find(m => m.ip === selectedMachine)?.name || 'Unknown'}...
                                 </div>
                             ) : currentEvents.length === 0 ? (
                                 <div className="no-events-message">
-                                    No {selectedCategory} events found {selectedMachine ? 
-                                        `on ${markedMachines.find(m => m.ip === selectedMachine)?.name}` : 
-                                        'on marked machine(s)'}
+                                    No {selectedCategory} events found on {markedMachines.find(m => m.ip === selectedMachine)?.name || 'Unknown'}
                                 </div>
                             ) : (
                                 <table className="events-table">
@@ -1004,7 +1241,7 @@ const EventViewer = () => {
                                     <div className="machine-stat">
                                         <span className="machine-stat-label">Selected Machine:</span>
                                         <span className="machine-stat-value">
-                                            {markedMachines.find(m => m.ip === selectedMachine)?.name}
+                                            {markedMachines.find(m => m.ip === selectedMachine)?.name || 'Unknown'}
                                         </span>
                                     </div>
                                 )}
@@ -1017,7 +1254,7 @@ const EventViewer = () => {
                                 <button
                                     className="action-button"
                                     onClick={() => handleManualRefresh(selectedMachine)}
-                                    disabled={!isConnected || isFetchingRef.current || markedMachines.length === 0}
+                                    disabled={!isConnected || isFetchingRef.current || markedMachines.length === 0 || !selectedMachine}
                                 >
                                     Refresh Events
                                 </button>
@@ -1050,7 +1287,15 @@ const EventViewer = () => {
                                 {selectedMachine && (
                                     <button
                                         className="action-button"
-                                        onClick={() => setSelectedMachine('')}
+                                        onClick={() => {
+                                            setSelectedMachine('');
+                                            setShowSelectMessage(true);
+                                            setEvents({
+                                                system: [],
+                                                application: [],
+                                                security: []
+                                            });
+                                        }}
                                         disabled={!isConnected || isFetchingRef.current}
                                     >
                                         View All Machines
@@ -1076,7 +1321,7 @@ const EventViewer = () => {
                                         <div className="status-detail">
                                             <span className="detail-label">Viewing:</span>
                                             <span className="detail-value">
-                                                {markedMachines.find(m => m.ip === selectedMachine)?.name}
+                                                {markedMachines.find(m => m.ip === selectedMachine)?.name || 'Unknown'}
                                             </span>
                                         </div>
                                     )}

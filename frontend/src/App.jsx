@@ -16,6 +16,7 @@ import ActiveDirectory from "./components/ActiveDirectory/ActiveDirectory";
 import MachineManagement from "./components/MachineManagement/MachineManagement";
 import Switch from "./components/Switch/Switch";
 import ESXI from "./components/ESXI/ESXi";
+import NetworkManagement from "./components/NetworkManagement/NetworkManagement";
 
 const ProtectedRoute = ({ children }) => {
   const token = localStorage.getItem("token");
@@ -108,6 +109,14 @@ function App() {
               <ProtectedRoute>
               <SidebarLayout>
                 <ActiveDirectory />
+              </SidebarLayout>
+            </ProtectedRoute>
+          } />
+
+          <Route path="/network-management" element={
+            <ProtectedRoute>
+              <SidebarLayout>
+                <NetworkManagement />
               </SidebarLayout>
             </ProtectedRoute>
           } />

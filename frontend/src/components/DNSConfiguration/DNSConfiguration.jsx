@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useWebSocket } from '../../context/WebSocketContext';
 import './DNSConfiguration.css';
 
@@ -34,7 +34,8 @@ function DNSConfiguration() {
   const [checkingStatus, setCheckingStatus] = useState(true); 
   const [dnsMachines, setDnsMachines] = useState([]);
   const [noDnsConfigured, setNoDnsConfigured] = useState(false);
-  const [showNoDnsModal, setShowNoDnsModal] = useState(false); // New state for modal
+  const [showNoDnsModal, setShowNoDnsModal] = useState(false);
+  const [machinesLoading, setMachinesLoading] = useState(true);
   const [newlyCreatedZones, setNewlyCreatedZones] = useState([]);
   const [newlyCreatedRecords, setNewlyCreatedRecords] = useState([]);
   
@@ -54,6 +55,7 @@ function DNSConfiguration() {
     targetMachine: 'primary'
   });
 
+  // Refs for managing state and preventing duplicate commands
   const initialCheckDone = useRef(false);
   const listenerAdded = useRef(false);
   const dnsMachinesRef = useRef([]);
@@ -75,12 +77,107 @@ function DNSConfiguration() {
   const maxRecordRefreshAttempts = 3;
   const recentlyCreatedRecordIds = useRef(new Set());
   const pendingRecordCreations = useRef(new Set());
+  const isFetchingRef = useRef(false);
+  const fetchInProgressRef = useRef(false);
+  const mountedRef = useRef(false);
+  const machineInfoListenerRef = useRef(false);
+  
+  // NEW: Command flow management refs
+  const commandInProgressRef = useRef(false);
+  const pendingCommandsRef = useRef([]);
+  const lastDNSCheckTimeRef = useRef(0);
+  const lastDNSInstallTimeRef = useRef(0);
+  const commandCooldownTime = 1000; // 1 second cooldown between same commands
 
   const navItems = [
     'Dashboard', 'DNS Configuration', 'Event Viewer', 'DHCP', 'Users', 
     'Resource Monitor', 'ESXi','Switch', 'Machine Management', 
     'Active Directory', 'Routing'
   ];
+
+  // Get the API base URL dynamically - memoized to prevent recreation
+  const API_BASE_URL = useMemo(() => {
+    if (typeof window !== 'undefined') {
+      const currentHost = window.location.hostname;
+      const currentPort = window.location.port;
+      
+      if (currentHost === 'localhost' || currentHost === '127.0.0.1') {
+        return `http://${currentHost}:5000`;
+      } else {
+        return `http://${currentHost}:5000`;
+      }
+    }
+    return 'http://localhost:5000';
+  }, []);
+
+  // ============ COMMAND FLOW MANAGEMENT ============
+  
+  /**
+   * Send a command with deduplication and cooldown
+   * Prevents sending the same command multiple times in quick succession
+   */
+  const sendCommandWithFlow = useCallback((command, payload = null) => {
+    const now = Date.now();
+    
+    // Check if this command was sent recently
+    if (command === 'check_dns_role_installed_windows_ansible') {
+      const timeSinceLastCheck = now - lastDNSCheckTimeRef.current;
+      if (timeSinceLastCheck < commandCooldownTime) {
+        console.log(`DNS Configuration: Skipping duplicate ${command} command (cooldown: ${commandCooldownTime - timeSinceLastCheck}ms remaining)`);
+        return;
+      }
+      lastDNSCheckTimeRef.current = now;
+    }
+    
+    if (command === 'install_dns_role_windows_ansible') {
+      const timeSinceLastInstall = now - lastDNSInstallTimeRef.current;
+      if (timeSinceLastInstall < commandCooldownTime) {
+        console.log(`DNS Configuration: Skipping duplicate ${command} command (cooldown: ${commandCooldownTime - timeSinceLastInstall}ms remaining)`);
+        return;
+      }
+      lastDNSInstallTimeRef.current = now;
+    }
+    
+    // Check if a command is already in progress
+    if (commandInProgressRef.current) {
+      console.log(`DNS Configuration: Command ${command} is already in progress, queueing...`);
+      pendingCommandsRef.current.push({ command, payload });
+      return;
+    }
+    
+    // Mark command as in progress
+    commandInProgressRef.current = true;
+    
+    console.log(`DNS Configuration: SENDING COMMAND: ${command}`, payload ? 'with payload' : 'no payload');
+    
+    // Send the command
+    sendCommand(command, payload);
+    
+    // Set a timeout to clear the in-progress flag
+    setTimeout(() => {
+      commandInProgressRef.current = false;
+      
+      // Process any pending commands
+      if (pendingCommandsRef.current.length > 0) {
+        const nextCommand = pendingCommandsRef.current.shift();
+        console.log(`DNS Configuration: Processing queued command: ${nextCommand.command}`);
+        sendCommandWithFlow(nextCommand.command, nextCommand.payload);
+      }
+    }, 500); // Small delay to prevent rapid-fire commands
+  }, [sendCommand]);
+
+  /**
+   * Process the next command in the queue
+   */
+  const processNextCommand = useCallback(() => {
+    if (pendingCommandsRef.current.length > 0 && !commandInProgressRef.current) {
+      const nextCommand = pendingCommandsRef.current.shift();
+      console.log(`DNS Configuration: Processing queued command: ${nextCommand.command}`);
+      sendCommandWithFlow(nextCommand.command, nextCommand.payload);
+    }
+  }, [sendCommandWithFlow]);
+
+  // ============ UTILITY FUNCTIONS ============
 
   const getTotalZonesCount = () => {
     return (zones.primary.forward.length + zones.primary.reverse.length + 
@@ -113,31 +210,6 @@ function DNSConfiguration() {
     return `${Math.floor(diffSec / 3600)} hours ago`;
   };
 
-  const handleRefreshMachines = () => {
-    console.log('DNS: Refreshing machine list');
-    getDnsMachinesFromDatabase();
-  };
-
-  useEffect(() => {
-    zonesDataRef.current = zones;
-  }, [zones]);
-
-  useEffect(() => {
-    dnsDetailsRef.current = dnsDetails;
-  }, [dnsDetails]);
-
-  useEffect(() => {
-    return () => {
-      if (refreshTimeoutRef.current) {
-        clearTimeout(refreshTimeoutRef.current);
-      }
-      if (autoRefreshTimeoutRef.current) {
-        clearTimeout(autoRefreshTimeoutRef.current);
-      }
-      pendingActionsRef.current.clear();
-    };
-  }, []);
-
   const extractResult = (responseData) => {
     if (!responseData) return null;
     
@@ -152,73 +224,174 @@ function DNSConfiguration() {
     return responseData;
   };
 
-  const getDnsMachinesFromDatabase = () => {
-    console.log('Fetching DNS machines from database...');
-    sendCommand('get_machine_info', {});
-  };
-
-  const processDnsMachines = (machines) => {
-    console.log('Processing DNS machines:', machines);
-    
-    if (!machines || !Array.isArray(machines)) {
-      console.error('Invalid machines data received:', machines);
-      setNoDnsConfigured(true);
-      setShowNoDnsModal(true);
-      return;
-    }
-
-    const dnsMachinesList = machines.filter(machine => {
-      return machine.marked_as && Array.isArray(machine.marked_as) && 
-             machine.marked_as.some(mark => mark.role === 'dns');
-    });
-
-    console.log('DNS machines found:', dnsMachinesList);
-
-    if (dnsMachinesList.length === 0) {
-      setNoDnsConfigured(true);
-      setShowNoDnsModal(true);
-      setError('No DNS machine configured. Please mark a machine as DNS primary or secondary in Machine Management.');
-      setCheckingStatus(false);
-      setLoading(false);
-      return;
-    }
-
-    setDnsMachines(dnsMachinesList);
-    dnsMachinesRef.current = dnsMachinesList;
-    setNoDnsConfigured(false);
-    setShowNoDnsModal(false);
-
-    const newDnsRoleInstalled = { primary: null, secondary: null };
-    dnsMachinesList.forEach(machine => {
-      const dnsRole = machine.marked_as?.find(mark => mark.role === 'dns');
-      if (dnsRole?.type === 'primary') {
-        newDnsRoleInstalled.primary = null;
-      } else if (dnsRole?.type === 'secondary') {
-        newDnsRoleInstalled.secondary = null;
-      }
-    });
-    setDnsRoleInstalled(newDnsRoleInstalled);
-  };
+  // ============ MACHINE MANAGEMENT ============
 
   const getWindowsInfoForMachine = (machine) => {
     if (!machine) {
-      console.error('No machine provided to getWindowsInfoForMachine');
+      console.error('DNS Configuration: No machine provided to getWindowsInfoForMachine');
       return null;
     }
     
-    console.log(`Getting Windows info for machine: ${machine.name} (${machine.ip})`);
+    console.log(`DNS Configuration: Getting Windows info for machine: ${machine.name || 'Unknown'} (${machine.ip})`);
     
-    if (!machine.password) {
-      console.error('No password found for machine:', machine.name);
+    // Check for password in different possible fields
+    const password = machine.password || machine.password_provided || '';
+    
+    console.log(`DNS Configuration: Password for machine ${machine.name || machine.ip}:`, password ? '***HIDDEN***' : 'NOT FOUND');
+    
+    if (!password) {
+      console.error('DNS Configuration: No password found for machine:', machine.name || machine.ip);
+      setError(`No password found for machine: ${machine.name || machine.ip}. Please check machine credentials in Machine Management.`);
       return null;
     }
     
     return {
       ip: machine.ip,
-      username: machine.username || 'admin',
-      password: machine.password
+      username: machine.username || machine.username_provided || 'admin',
+      password: password
     };
   };
+
+  const fetchMachineInfo = useCallback(async () => {
+    if (fetchInProgressRef.current || !mountedRef.current) {
+      console.log('DNS Configuration: Fetch already in progress or component unmounted');
+      return;
+    }
+    
+    fetchInProgressRef.current = true;
+    console.log('DNS Configuration: Fetching machines from Node.js REST API...');
+    setMachinesLoading(true);
+    setError(null);
+    
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) {
+        throw new Error('No authentication token found');
+      }
+      
+      // Try with include_password=true parameter
+      console.log('DNS Configuration: Trying to fetch machines WITH passwords...');
+      
+      const response = await fetch(`${API_BASE_URL}/api/machines/get-machines?include_password=true`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      
+      if (!response.ok) {
+        console.log('DNS Configuration: Endpoint with password parameter failed, trying without parameter...');
+        
+        // Try without parameter
+        const response2 = await fetch(`${API_BASE_URL}/api/machines/get-machines`, {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          }
+        });
+        
+        if (!response2.ok) {
+          throw new Error(`Failed to fetch machines: ${response2.status} ${response2.statusText}`);
+        }
+        
+        const data = await response2.json();
+        console.log('DNS Configuration: Received machines from /api/machines/get-machines:', data);
+        await processMachineData(data);
+        return;
+      }
+      
+      const data = await response.json();
+      console.log('DNS Configuration: Received machines from /api/machines/get-machines?include_password=true:', data);
+      await processMachineData(data);
+      
+    } catch (err) {
+      console.error('DNS Configuration: REST API failed:', err);
+      if (mountedRef.current) {
+        setError(`Failed to fetch machines: ${err.message}. Please check if machines are properly configured.`);
+        setMachinesLoading(false);
+      }
+      
+      // Fallback to WebSocket only if component is still mounted
+      if (mountedRef.current && isConnected) {
+        console.log('DNS Configuration: Falling back to WebSocket for get_machine_info');
+        sendCommandWithFlow('get_machine_info', {});
+      }
+    } finally {
+      fetchInProgressRef.current = false;
+    }
+    
+    async function processMachineData(data) {
+      // Process the data - adjust based on your API response structure
+      let machines = [];
+      if (data.machines && Array.isArray(data.machines)) {
+        machines = data.machines;
+      } else if (data.data && Array.isArray(data.data)) {
+        machines = data.data;
+      } else if (Array.isArray(data)) {
+        machines = data;
+      }
+      
+      console.log('DNS Configuration: Total machines found:', machines.length);
+      
+      // Filter for DNS machines
+      const dnsMachinesList = machines.filter(machine => {
+        const hasMarks = machine.marked_as && 
+                       Array.isArray(machine.marked_as) && 
+                       machine.marked_as.some(mark => mark.role === 'dns');
+        
+        if (hasMarks) {
+          console.log(`DNS Configuration: Found DNS machine: ${machine.name || 'Unknown'} (${machine.ip})`, {
+            id: machine.id,
+            hasPassword: !!(machine.password || machine.password_provided),
+            hasUsername: !!(machine.username || machine.username_provided),
+            marks: machine.marked_as
+          });
+        }
+        
+        return hasMarks;
+      });
+      
+      console.log(`DNS Configuration: Found ${dnsMachinesList.length} DNS machines:`, dnsMachinesList);
+      
+      if (dnsMachinesList.length === 0) {
+        console.log('DNS Configuration: No DNS machines found');
+        setNoDnsConfigured(true);
+        setShowNoDnsModal(true);
+        setMachinesLoading(false);
+        setLoading(false);
+        setCheckingStatus(false);
+        return;
+      }
+      
+      // Check if passwords are available
+      const machinesWithPasswords = dnsMachinesList.filter(machine => {
+        const hasPassword = machine.password || machine.password_provided;
+        if (!hasPassword) {
+          console.warn(`DNS Configuration: Machine ${machine.name || 'Unknown'} (${machine.ip}) has no password`);
+        }
+        return hasPassword;
+      });
+      
+      if (machinesWithPasswords.length === 0) {
+        console.error('DNS Configuration: No DNS machines have passwords');
+        setError('DNS machines found but no passwords available. Please check machine credentials in Machine Management.');
+        setNoDnsConfigured(true);
+        setShowNoDnsModal(true);
+      } else {
+        setNoDnsConfigured(false);
+        setShowNoDnsModal(false);
+      }
+      
+      setDnsMachines(dnsMachinesList);
+      dnsMachinesRef.current = dnsMachinesList;
+      setMachinesLoading(false);
+      
+      // Check DNS status on these machines (using command flow)
+      checkDNSOnMachines(dnsMachinesList);
+    }
+  }, [API_BASE_URL, isConnected, sendCommandWithFlow]);
 
   const getMachineByType = (type) => {
     return dnsMachinesRef.current.find(machine => {
@@ -231,17 +404,17 @@ function DNSConfiguration() {
     const machine = getMachineByType(targetMachine);
     
     if (!machine) {
-      console.error(`No ${targetMachine} DNS machine found`);
+      console.error(`DNS Configuration: No ${targetMachine} DNS machine found`);
       return null;
     }
     
     const windowsInfo = getWindowsInfoForMachine(machine);
     if (!windowsInfo) {
-      console.error(`Failed to get Windows info for ${targetMachine} machine:`, machine.name);
+      console.error(`DNS Configuration: Failed to get Windows info for ${targetMachine} machine:`, machine.name);
       return null;
     }
     
-    console.log(`Creating payload for ${targetMachine} machine:`, machine.name);
+    console.log(`DNS Configuration: Creating payload for ${targetMachine} machine:`, machine.name);
     
     return {
       windows_info: windowsInfo,
@@ -249,28 +422,7 @@ function DNSConfiguration() {
     };
   };
 
-  const createDualPayload = (additionalData = {}) => {
-    const primaryMachine = getMachineByType('primary');
-    const secondaryMachine = getMachineByType('secondary');
-    
-    if (!primaryMachine && !secondaryMachine) {
-      console.error('No DNS machines found');
-      return null;
-    }
-    
-    const payload = {
-      primary_windows_info: primaryMachine ? getWindowsInfoForMachine(primaryMachine) : null,
-      secondary_windows_info: secondaryMachine ? getWindowsInfoForMachine(secondaryMachine) : null,
-      ...additionalData
-    };
-    
-    console.log('Creating dual payload:', {
-      hasPrimary: !!primaryMachine,
-      hasSecondary: !!secondaryMachine
-    });
-    
-    return payload;
-  };
+  // ============ ZONE AND RECORD MANAGEMENT ============
 
   const normalizeZoneName = (zoneName) => {
     if (!zoneName) return '';
@@ -278,13 +430,13 @@ function DNSConfiguration() {
   };
 
   const processZonesFromDetails = useCallback((details, machineType) => {
-    console.log(`Processing zones for ${machineType}:`, details);
+    console.log(`DNS Configuration: Processing zones for ${machineType}:`, details);
     
     const forwardZones = [];
     const reverseZones = [];
     
     if (details.forward_zones) {
-      console.log(`Found forward zones for ${machineType}:`, Object.keys(details.forward_zones));
+      console.log(`DNS Configuration: Found forward zones for ${machineType}:`, Object.keys(details.forward_zones));
       
       Object.entries(details.forward_zones).forEach(([zoneKey, zoneData]) => {
         try {
@@ -312,15 +464,15 @@ function DNSConfiguration() {
             machine: machineType
           });
           
-          console.log(`Added forward zone: ${zoneName} (${recordCount} records)`);
+          console.log(`DNS Configuration: Added forward zone: ${zoneName} (${recordCount} records)`);
         } catch (err) {
-          console.error(`Error processing forward zone ${zoneKey}:`, err);
+          console.error(`DNS Configuration: Error processing forward zone ${zoneKey}:`, err);
         }
       });
     }
     
     if (details.reverse_zones) {
-      console.log(`Found reverse zones for ${machineType}:`, Object.keys(details.reverse_zones));
+      console.log(`DNS Configuration: Found reverse zones for ${machineType}:`, Object.keys(details.reverse_zones));
       
       Object.entries(details.reverse_zones).forEach(([zoneKey, zoneData]) => {
         try {
@@ -348,14 +500,14 @@ function DNSConfiguration() {
             machine: machineType
           });
           
-          console.log(`Added reverse zone: ${zoneName} (${recordCount} records)`);
+          console.log(`DNS Configuration: Added reverse zone: ${zoneName} (${recordCount} records)`);
         } catch (err) {
-          console.error(`Error processing reverse zone ${zoneKey}:`, err);
+          console.error(`DNS Configuration: Error processing reverse zone ${zoneKey}:`, err);
         }
       });
     }
     
-    console.log(`Processed ${machineType} zones - Forward: ${forwardZones.length}, Reverse: ${reverseZones.length}`);
+    console.log(`DNS Configuration: Processed ${machineType} zones - Forward: ${forwardZones.length}, Reverse: ${reverseZones.length}`);
     
     return {
       forward: forwardZones,
@@ -366,7 +518,7 @@ function DNSConfiguration() {
   const forceRefreshDNSData = useCallback(() => {
     return new Promise((resolve) => {
       if (pendingRefreshRef.current) {
-        console.log('Refresh already in progress, skipping');
+        console.log('DNS Configuration: Refresh already in progress, skipping');
         resolve(false);
         return;
       }
@@ -374,16 +526,16 @@ function DNSConfiguration() {
       pendingRefreshRef.current = true;
       retryCountRef.current = 0;
       
-      console.log('Starting forced DNS data refresh...');
+      console.log('DNS Configuration: Starting forced DNS data refresh...');
       performDNSRefresh(resolve);
     });
   }, []);
 
   const fetchZoneRecords = useCallback((zoneName, machineType, zoneType = null, forceRefresh = false, keepNewRecords = true) => {
-    console.log(`Fetching records for zone: ${zoneName} (${machineType})`);
+    console.log(`DNS Configuration: Fetching records for zone: ${zoneName} (${machineType})`);
     
     if (!zoneName || !machineType) {
-      console.error('Missing zone name or machine type');
+      console.error('DNS Configuration: Missing zone name or machine type');
       return;
     }
     
@@ -398,7 +550,7 @@ function DNSConfiguration() {
     
     const details = dnsDetailsRef.current[machineType];
     if (!details) {
-      console.log(`No DNS details available for ${machineType}, fetching fresh data...`);
+      console.log(`DNS Configuration: No DNS details available for ${machineType}, fetching fresh data...`);
       forceRefreshDNSData().then(() => {
         setTimeout(() => {
           fetchZoneRecords(zoneName, machineType, zoneType, true, keepNewRecords);
@@ -420,7 +572,7 @@ function DNSConfiguration() {
         
         if (normalizedCurrentZoneName === normalizedZoneName || zoneKey === zoneName) {
           foundZone = true;
-          console.log(`Found zone: ${currentZoneName}`, zoneData);
+          console.log(`DNS Configuration: Found zone: ${currentZoneName}`, zoneData);
           
           if (zoneData.records) {
             Object.entries(zoneData.records).forEach(([recordType, recordTypeObj]) => {
@@ -493,13 +645,13 @@ function DNSConfiguration() {
     }
     
     if (!foundZone && allRecords.length === 0) {
-      console.warn(`Zone ${zoneName} not found in ${machineType} details.`);
-      console.log('Available zones:', {
+      console.warn(`DNS Configuration: Zone ${zoneName} not found in ${machineType} details.`);
+      console.log('DNS Configuration: Available zones:', {
         forward: details.forward_zones ? Object.keys(details.forward_zones) : [],
         reverse: details.reverse_zones ? Object.keys(details.reverse_zones) : []
       });
     } else {
-      console.log(`Found ${allRecords.length} records for zone ${zoneName}`);
+      console.log(`DNS Configuration: Found ${allRecords.length} records for zone ${zoneName}`);
       
       const uniqueRecords = [];
       const seen = new Set();
@@ -512,7 +664,7 @@ function DNSConfiguration() {
         }
       });
       
-      console.log(`After deduplication: ${uniqueRecords.length} unique records`);
+      console.log(`DNS Configuration: After deduplication: ${uniqueRecords.length} unique records`);
       setRecords(uniqueRecords);
     }
     
@@ -524,7 +676,7 @@ function DNSConfiguration() {
 
   const performDNSRefresh = useCallback((resolve) => {
     if (!isConnected) {
-      console.error('WebSocket not connected');
+      console.error('DNS Configuration: WebSocket not connected');
       setError('WebSocket not connected.');
       pendingRefreshRef.current = false;
       if (resolve) resolve(false);
@@ -535,58 +687,72 @@ function DNSConfiguration() {
     const secondaryMachine = getMachineByType('secondary');
     
     if (!primaryMachine && !secondaryMachine) {
-      console.error('No DNS machines available');
+      console.error('DNS Configuration: No DNS machines available');
       setError('No DNS machines available.');
       pendingRefreshRef.current = false;
       if (resolve) resolve(false);
       return;
     }
 
-    console.log(`Refreshing DNS data (attempt ${retryCountRef.current + 1}/${maxRetries})...`);
+    console.log(`DNS Configuration: Refreshing DNS data (attempt ${retryCountRef.current + 1}/${maxRetries})...`);
     
     setRefreshing(true);
     setError(null);
     setZonesLoading({ primary: !!primaryMachine, secondary: !!secondaryMachine });
     
-    const payload = createDualPayload();
-    if (!payload) {
-      console.error('Failed to create payload');
-      setError('Failed to create payload');
-      setRefreshing(false);
-      pendingRefreshRef.current = false;
-      if (resolve) resolve(false);
-      return;
+    // Send separate commands for each machine
+    const sendCommandForMachine = (machine, machineType) => {
+      const payload = {
+        windows_info: getWindowsInfoForMachine(machine)
+      };
+      
+      if (!payload.windows_info) {
+        console.error(`DNS Configuration: Failed to create payload for ${machineType}`);
+        return;
+      }
+      
+      console.log(`DNS Configuration: Sending get_dns_details for ${machineType}: ${machine.ip}`);
+      sendCommandWithFlow('get_dns_details_windows_ansible', payload);
+    };
+    
+    // Send command for primary if exists
+    if (primaryMachine) {
+      sendCommandForMachine(primaryMachine, 'primary');
     }
     
-    console.log('SENDING COMMAND: get_dns_details_windows_ansible');
+    // Send command for secondary if exists (with delay to avoid command collision)
+    if (secondaryMachine) {
+      setTimeout(() => {
+        sendCommandForMachine(secondaryMachine, 'secondary');
+      }, 1000);
+    }
     
-    sendCommand('get_dns_details_windows_ansible', payload);
     lastCommandTimeRef.current = new Date();
     
     setTimeout(() => {
       if (pendingRefreshRef.current && retryCountRef.current < maxRetries) {
         retryCountRef.current++;
-        console.log(`No response, retrying (${retryCountRef.current}/${maxRetries})...`);
+        console.log(`DNS Configuration: No response, retrying (${retryCountRef.current}/${maxRetries})...`);
         performDNSRefresh(resolve);
       } else if (pendingRefreshRef.current) {
-        console.error('Max retries reached, giving up');
+        console.error('DNS Configuration: Max retries reached, giving up');
         setError('Failed to refresh DNS data after multiple attempts. Please try again.');
         setRefreshing(false);
         pendingRefreshRef.current = false;
         if (resolve) resolve(false);
       }
-    }, 5000);
-  }, [isConnected, sendCommand]);
+    }, 10000); // Increased timeout for multiple machines
+  }, [isConnected, sendCommandWithFlow]);
 
   const refreshDNSData = () => {
     forceRefreshDNSData();
   };
 
   const processDNSDetails = useCallback((responseData, machineType = null) => {
-    console.log('Processing DNS details response:', responseData);
+    console.log('DNS Configuration: Processing DNS details response:', responseData);
     
     if (!responseData) {
-      console.log('No response data to process');
+      console.log('DNS Configuration: No response data to process');
       return;
     }
     
@@ -597,147 +763,94 @@ function DNSConfiguration() {
       refreshTimeoutRef.current = null;
     }
     
-    if (responseData.primary_dns_details || responseData.secondary_dns_details) {
-      console.log('Found dual machine DNS details structure');
+    // REMOVED: The old logic checking for primary_dns_details or secondary_dns_details
+    // Now we process the response data directly based on the machine type
+    
+    // Determine machine type from response or use provided parameter
+    let targetMachineType = machineType;
+    
+    // If no machine type provided, try to determine it
+    if (!targetMachineType) {
+      // Check if we can determine machine type from payload or response
+      const primaryMachine = getMachineByType('primary');
+      const secondaryMachine = getMachineByType('secondary');
       
-      const updates = {};
-      
-      if (responseData.primary_dns_details) {
-        console.log('Processing primary DNS details...');
-        console.log('Primary forward zones keys:', Object.keys(responseData.primary_dns_details.forward_zones || {}));
-        console.log('Primary reverse zones keys:', Object.keys(responseData.primary_dns_details.reverse_zones || {}));
-        
-        const primaryZones = processZonesFromDetails(responseData.primary_dns_details, 'primary');
-        updates.primary = {
-          details: responseData.primary_dns_details,
-          zones: primaryZones
-        };
-        console.log('Primary zones processed - Forward:', primaryZones.forward.length, 'Reverse:', primaryZones.reverse.length);
+      // If we have both machines, we need to track which response is for which machine
+      // This is a limitation - we may need backend to include machine identification
+      if (primaryMachine && !secondaryMachine) {
+        targetMachineType = 'primary';
+      } else if (!primaryMachine && secondaryMachine) {
+        targetMachineType = 'secondary';
+      } else {
+        // Default to primary if we can't determine
+        targetMachineType = 'primary';
+        console.log('DNS Configuration: Could not determine machine type, defaulting to primary');
       }
-      
-      if (responseData.secondary_dns_details) {
-        console.log('Processing secondary DNS details...');
-        console.log('Secondary forward zones keys:', Object.keys(responseData.secondary_dns_details.forward_zones || {}));
-        console.log('Secondary reverse zones keys:', Object.keys(responseData.secondary_dns_details.reverse_zones || {}));
-        
-        const secondaryZones = processZonesFromDetails(responseData.secondary_dns_details, 'secondary');
-        updates.secondary = {
-          details: responseData.secondary_dns_details,
-          zones: secondaryZones
-        };
-        console.log('Secondary zones processed - Forward:', secondaryZones.forward.length, 'Reverse:', secondaryZones.reverse.length);
-      }
-      
-      setDnsDetails(prev => {
-        const newDetails = {
-          primary: updates.primary?.details || prev.primary,
-          secondary: updates.secondary?.details || prev.secondary
-        };
-        dnsDetailsRef.current = newDetails;
-        return newDetails;
-      });
-      
-      setZones(prev => {
-        const newZones = { ...prev };
-        if (updates.primary) {
-          newZones.primary = updates.primary.zones;
-        }
-        if (updates.secondary) {
-          newZones.secondary = updates.secondary.zones;
-        }
-        zonesDataRef.current = newZones;
-        
-        console.log('UPDATED ZONES STATE:');
-        console.log('Primary forward:', newZones.primary.forward.map(z => z.name));
-        console.log('Primary reverse:', newZones.primary.reverse.map(z => z.name));
-        console.log('Secondary forward:', newZones.secondary.forward.map(z => z.name));
-        console.log('Secondary reverse:', newZones.secondary.reverse.map(z => z.name));
-        
-        checkNewlyCreatedZonesAgainstResponse(newZones, updates);
-        
-        return newZones;
-      });
-      
-      setZonesLoading({ primary: false, secondary: false });
-      setRefreshing(false);
-      setError(null);
-      lastCommandTimeRef.current = new Date();
-      pendingRefreshRef.current = false;
-      hasFetchedInitialDetails.current = true;
-      actionInProgressRef.current = false;
-      
-      if (selectedZone.zone && selectedZone.machine) {
-        console.log(`Auto-refreshing records for selected zone: ${selectedZone.zone} (${selectedZone.machine})`);
-        setTimeout(() => {
-          fetchZoneRecords(selectedZone.zone, selectedZone.machine, selectedZone.zoneType, true);
-        }, 300);
-      }
-      
-      checkNewlyCreatedRecordsAgainstResponse(updates);
-      
-      return;
     }
     
-    if (machineType || responseData.dns_details) {
-      const targetMachineType = machineType || 'primary';
-      const details = responseData.dns_details || responseData;
-      const processedZones = processZonesFromDetails(details, targetMachineType);
+    console.log(`DNS Configuration: Processing DNS details for machine: ${targetMachineType}`);
+    
+    // Process the response data directly (not nested in primary_dns_details or secondary_dns_details)
+    const details = responseData.dns_details || responseData;
+    const processedZones = processZonesFromDetails(details, targetMachineType);
+    
+    setDnsDetails(prev => {
+      const newDetails = {
+        ...prev,
+        [targetMachineType]: details
+      };
+      dnsDetailsRef.current = newDetails;
+      return newDetails;
+    });
+    
+    setZones(prev => {
+      const newZones = {
+        ...prev,
+        [targetMachineType]: processedZones
+      };
+      zonesDataRef.current = newZones;
+      console.log(`DNS Configuration: Updated ${targetMachineType} zones:`, newZones[targetMachineType]);
       
-      setDnsDetails(prev => {
-        const newDetails = {
-          ...prev,
-          [targetMachineType]: details
-        };
-        dnsDetailsRef.current = newDetails;
-        return newDetails;
-      });
-      
-      setZones(prev => {
-        const newZones = {
-          ...prev,
-          [targetMachineType]: processedZones
-        };
-        zonesDataRef.current = newZones;
-        console.log(`Updated ${targetMachineType} zones:`, newZones[targetMachineType]);
-        
-        if (newlyCreatedZones.length > 0) {
-          const remainingZones = newlyCreatedZones.filter(
-            zone => !(zone.machineType === targetMachineType && 
-                     processedZones.forward.some(z => normalizeZoneName(z.name) === normalizeZoneName(zone.name)))
-          );
-          if (remainingZones.length !== newlyCreatedZones.length) {
-            setNewlyCreatedZones(remainingZones);
-          }
+      if (newlyCreatedZones.length > 0) {
+        const remainingZones = newlyCreatedZones.filter(
+          zone => !(zone.machineType === targetMachineType && 
+                   processedZones.forward.some(z => normalizeZoneName(z.name) === normalizeZoneName(zone.name)))
+        );
+        if (remainingZones.length !== newlyCreatedZones.length) {
+          setNewlyCreatedZones(remainingZones);
         }
-        
-        return newZones;
-      });
-      
-      setZonesLoading(prev => ({ ...prev, [targetMachineType]: false }));
-      setRefreshing(false);
-      setError(null);
-      lastCommandTimeRef.current = new Date();
-      pendingRefreshRef.current = false;
-      hasFetchedInitialDetails.current = true;
-      actionInProgressRef.current = false;
-      
-      if (selectedZone.zone && selectedZone.machine === targetMachineType) {
-        console.log(`Auto-refreshing records for selected zone: ${selectedZone.zone}`);
-        setTimeout(() => {
-          fetchZoneRecords(selectedZone.zone, targetMachineType, selectedZone.zoneType, true);
-        }, 300);
       }
       
-      checkNewlyCreatedRecordsAgainstResponse({
-        [targetMachineType]: { details: details, zones: processedZones }
-      });
+      return newZones;
+    });
+    
+    setZonesLoading(prev => ({ ...prev, [targetMachineType]: false }));
+    setRefreshing(false);
+    setError(null);
+    lastCommandTimeRef.current = new Date();
+    pendingRefreshRef.current = false;
+    hasFetchedInitialDetails.current = true;
+    actionInProgressRef.current = false;
+    
+    if (selectedZone.zone && selectedZone.machine === targetMachineType) {
+      console.log(`DNS Configuration: Auto-refreshing records for selected zone: ${selectedZone.zone}`);
+      setTimeout(() => {
+        fetchZoneRecords(selectedZone.zone, targetMachineType, selectedZone.zoneType, true);
+      }, 300);
     }
+    
+    // Check newly created records against this response
+    const updateData = {
+      [targetMachineType]: { details: details, zones: processedZones }
+    };
+    checkNewlyCreatedRecordsAgainstResponse(updateData);
+    
   }, [selectedZone, processZonesFromDetails, newlyCreatedZones, fetchZoneRecords]);
 
   const checkNewlyCreatedZonesAgainstResponse = useCallback((newZones, updates) => {
     if (newlyCreatedZones.length === 0) return;
     
-    console.log('Checking newly created zones against response...');
+    console.log('DNS Configuration: Checking newly created zones against response...');
     
     const remainingZones = [];
     
@@ -746,36 +859,35 @@ function DNSConfiguration() {
       const normalizedZoneName = normalizeZoneName(name);
       let found = false;
       
-      if (machineType === 'primary' && updates.primary) {
-        found = updates.primary.zones.forward.some(z => normalizeZoneName(z.name) === normalizedZoneName);
-        if (!found) {
-          found = updates.primary.zones.reverse.some(z => normalizeZoneName(z.name) === normalizedZoneName);
-        }
-      } else if (machineType === 'secondary' && updates.secondary) {
-        found = updates.secondary.zones.forward.some(z => normalizeZoneName(z.name) === normalizedZoneName);
-        if (!found) {
-          found = updates.secondary.zones.reverse.some(z => normalizeZoneName(z.name) === normalizedZoneName);
+      // Check if zone exists in the updates
+      if (updates && updates[machineType]) {
+        const machineUpdates = updates[machineType];
+        if (machineUpdates.zones) {
+          found = machineUpdates.zones.forward.some(z => normalizeZoneName(z.name) === normalizedZoneName);
+          if (!found) {
+            found = machineUpdates.zones.reverse.some(z => normalizeZoneName(z.name) === normalizedZoneName);
+          }
         }
       }
       
       if (found) {
-        console.log(`New zone "${name}" found in response! Removing from pending list.`);
+        console.log(`DNS Configuration: New zone "${name}" found in response! Removing from pending list.`);
       } else {
-        console.log(`New zone "${name}" NOT found in response, keeping in pending list.`);
+        console.log(`DNS Configuration: New zone "${name}" NOT found in response, keeping in pending list.`);
         remainingZones.push(newZone);
       }
     });
     
     if (remainingZones.length !== newlyCreatedZones.length) {
       setNewlyCreatedZones(remainingZones);
-      console.log(`Updated newlyCreatedZones: ${remainingZones.length} zones pending`);
+      console.log(`DNS Configuration: Updated newlyCreatedZones: ${remainingZones.length} zones pending`);
     }
   }, [newlyCreatedZones]);
 
   const checkNewlyCreatedRecordsAgainstResponse = useCallback((updates) => {
     if (newlyCreatedRecords.length === 0) return;
     
-    console.log('Checking newly created records against response...');
+    console.log('DNS Configuration: Checking newly created records against response...');
     
     const remainingRecords = [];
     
@@ -785,7 +897,7 @@ function DNSConfiguration() {
       const normalizedRecordName = normalizeZoneName(name);
       let found = false;
       
-      const targetMachine = machine === 'primary' ? updates.primary : updates.secondary;
+      const targetMachine = updates[machine];
       
       if (targetMachine && targetMachine.details) {
         const details = targetMachine.details;
@@ -807,7 +919,7 @@ function DNSConfiguration() {
                     const recordData = recordTypeObj[name];
                     const recordValue = recordData.value || recordData.data || '';
                     if (recordValue !== newRecord.data) {
-                      console.log(`Record "${name}" found but data doesn't match: ${recordValue} vs ${newRecord.data}`);
+                      console.log(`DNS Configuration: Record "${name}" found but data doesn't match: ${recordValue} vs ${newRecord.data}`);
                     }
                   }
                 }
@@ -836,21 +948,23 @@ function DNSConfiguration() {
       }
       
       if (found) {
-        console.log(`New record "${name}" (${type}) found in response!`);
+        console.log(`DNS Configuration: New record "${name}" (${type}) found in response!`);
       } else {
-        console.log(`New record "${name}" (${type}) NOT found in response, keeping in pending list.`);
+        console.log(`DNS Configuration: New record "${name}" (${type}) NOT found in response, keeping in pending list.`);
         remainingRecords.push(newRecord);
       }
     });
     
     if (remainingRecords.length !== newlyCreatedRecords.length) {
       setNewlyCreatedRecords(remainingRecords);
-      console.log(`Updated newlyCreatedRecords: ${remainingRecords.length} records pending`);
+      console.log(`DNS Configuration: Updated newlyCreatedRecords: ${remainingRecords.length} records pending`);
     }
   }, [newlyCreatedRecords]);
 
+  // ============ COMMAND HANDLERS ============
+
   const handleWebSocketMessage = useCallback((message) => {
-    console.log('DNS received WebSocket message:', message);
+    console.log('DNS Configuration: received WebSocket message:', message);
     
     let command, result, error, payload;
     
@@ -881,178 +995,361 @@ function DNSConfiguration() {
     }
     
     if (!command) {
-      console.log('No command found in message:', message);
+      console.log('DNS Configuration: No command found in message:', message);
       return;
     }
     
-    console.log(`Processing response for command: ${command}`, { result, error, payload });
+    console.log(`DNS Configuration: Processing response for command: ${command}`, { result, error, payload });
     
     if (error) {
-      console.log(`Error from backend for command ${command}:`, error);
+      console.log(`DNS Configuration: Error from backend for command ${command}:`, error);
       setError(`Error: ${error}`);
       setLoading(false);
       setCheckingStatus(false);
       setActionLoading(false);
       actionInProgressRef.current = false;
+      commandInProgressRef.current = false;
+      processNextCommand();
       return;
     }
     
     const responseData = extractResult(result);
-    console.log('Extracted response data:', responseData);
+    console.log('DNS Configuration: Extracted response data:', responseData);
     
     switch(command) {
       case 'get_machine_info':
-        console.log('Received machine info');
-        if (responseData && responseData.machines) {
-          processDnsMachines(responseData.machines);
+        console.log('DNS Configuration: Received machine info via WebSocket fallback');
+        // Process machine info from WebSocket fallback
+        if (responseData && responseData.machines && Array.isArray(responseData.machines)) {
+          const dnsMachinesList = responseData.machines.filter(machine => {
+            return machine.marked_as && Array.isArray(machine.marked_as) && 
+                   machine.marked_as.some(mark => mark.role === 'dns');
+          });
+          
+          console.log(`DNS Configuration: Found ${dnsMachinesList.length} DNS machines via WebSocket:`, dnsMachinesList);
+          
+          if (dnsMachinesList.length === 0) {
+            setNoDnsConfigured(true);
+            setShowNoDnsModal(true);
+            setMachinesLoading(false);
+            setLoading(false);
+            setCheckingStatus(false);
+          } else {
+            setDnsMachines(dnsMachinesList);
+            dnsMachinesRef.current = dnsMachinesList;
+            setNoDnsConfigured(false);
+            setShowNoDnsModal(false);
+            setMachinesLoading(false);
+            checkDNSOnMachines(dnsMachinesList);
+          }
         }
+        commandInProgressRef.current = false;
+        processNextCommand();
         break;
         
       case 'check_dns_role_installed_windows_ansible':
-        console.log('Received DNS check response');
+        console.log('DNS Configuration: Received DNS check response');
         handleDNSCheckResponse(responseData);
+        commandInProgressRef.current = false;
+        processNextCommand();
         break;
         
       case 'get_dns_details_windows_ansible':
-        console.log('Received DNS details response');
+        console.log('DNS Configuration: Received DNS details response');
         if (responseData) {
-          processDNSDetails(responseData);
+          // Try to determine which machine this response is for based on payload
+          let machineType = null;
+          if (payload && payload.windows_info) {
+            // Check if this matches any of our configured machines
+            const primaryMachine = getMachineByType('primary');
+            const secondaryMachine = getMachineByType('secondary');
+            
+            if (primaryMachine && payload.windows_info.ip === primaryMachine.ip) {
+              machineType = 'primary';
+            } else if (secondaryMachine && payload.windows_info.ip === secondaryMachine.ip) {
+              machineType = 'secondary';
+            }
+          }
+          
+          processDNSDetails(responseData, machineType);
         } else {
-          console.error('Empty response for DNS details');
+          console.error('DNS Configuration: Empty response for DNS details');
           setError('Received empty response from server');
           setZonesLoading({ primary: false, secondary: false });
           setRefreshing(false);
           actionInProgressRef.current = false;
         }
+        commandInProgressRef.current = false;
+        processNextCommand();
         break;
         
       case 'install_dns_role_windows_ansible':
-        console.log('Received DNS installation response');
+        console.log('DNS Configuration: Received DNS installation response');
         handleDNSInstallResponse(responseData);
+        commandInProgressRef.current = false;
+        processNextCommand();
         break;
         
       case 'create_zone_forward_lookup_zone_dns_windows_ansible':
       case 'create_zone_reverse_lookup_zone_dns_windows_ansible':
-        console.log('Received zone creation response');
+        console.log('DNS Configuration: Received zone creation response');
         handleZoneCreationResponse(responseData);
+        commandInProgressRef.current = false;
+        processNextCommand();
         break;
         
       case 'create_host_record_forward_lookup_zone_dns_windows_ansible':
       case 'create_pointer_record_reverse_lookup_zone_dns_windows_ansible':
-        console.log('Received record creation response');
+        console.log('DNS Configuration: Received record creation response');
         handleRecordCreationResponse(responseData);
+        commandInProgressRef.current = false;
+        processNextCommand();
         break;
         
       case 'delete_forward_zone_dns_windows_ansible':
       case 'delete_reverse_zone_dns_windows_ansible':
-        console.log('Received zone deletion response');
+        console.log('DNS Configuration: Received zone deletion response');
         handleZoneDeletionResponse(responseData);
+        commandInProgressRef.current = false;
+        processNextCommand();
         break;
         
       default:
-        console.log(`Unhandled command: ${command}`);
+        console.log(`DNS Configuration: Unhandled command: ${command}`);
+        commandInProgressRef.current = false;
+        processNextCommand();
     }
-  }, [processDNSDetails, processDnsMachines]);
+  }, [processDNSDetails, processNextCommand]);
 
   const handleDNSCheckResponse = (responseData) => {
-    if (responseData && (responseData.primary_installed !== undefined || responseData.secondary_installed !== undefined)) {
-      const newDnsRoleInstalled = { ...dnsRoleInstalled };
-      
-      if (responseData.primary_installed !== undefined) {
-        newDnsRoleInstalled.primary = responseData.primary_installed === true || 
-                                      responseData.primary_installed === "true" ||
-                                      responseData.primary_installed === "installed";
-      }
-      
-      if (responseData.secondary_installed !== undefined) {
-        newDnsRoleInstalled.secondary = responseData.secondary_installed === true || 
-                                        responseData.secondary_installed === "true" ||
-                                        responseData.secondary_installed === "installed";
-      }
-      
-      setDnsRoleInstalled(newDnsRoleInstalled);
+    console.log('DNS Configuration: Processing DNS check response:', responseData);
+    
+    if (!responseData) {
+      console.log('DNS Configuration: No response data in DNS check');
       setLoading(false);
       setCheckingStatus(false);
+      return;
+    }
+    
+    const newDnsRoleInstalled = { ...dnsRoleInstalled };
+    
+    // Check installation status from response
+    let isInstalled = false;
+
+    if (responseData.requires_installation === false){
+      isInstalled = true;
+      console.log('DNS Configuration: requires_installation is false. DNS is installed');
+    } else if (responseData.dns_installed === true) {
+      isInstalled = true;
+      console.log('DNS Configuration: dns_installed is true. DNS is installed.');
+    } else if (responseData.success === true && responseData.message && responseData.message.includes('installed')){
+      isInstalled = true;
+      console.log('DNS Configuration: success and message indicate DNS is installed');
+    } else if (typeof responseData === 'string' && responseData.toLowerCase().includes('installed')) {
+      isInstalled = true;
+      console.log('DNS Configuration: string response contains "installed"');
+    }
+
+    console.log('DNS Configuration: DNS installed status:', isInstalled);
+    
+    if (typeof responseData === 'string') {
+      const lowerResponse = responseData.toLowerCase();
+      isInstalled = lowerResponse.includes('true') || 
+                   lowerResponse.includes('installed') ||
+                   lowerResponse.includes('dns installed') ||
+                   lowerResponse.includes('dns role installation done');
+    } else if (typeof responseData === 'object') {
+      isInstalled = responseData.installed === true || 
+                   responseData.installed === "true" ||
+                   responseData.installed === "installed" ||
+                   responseData.success === true;
+    }
+    
+    // Try to determine which machine this response is for
+    // This is a limitation - we can't know which machine responded
+    // For now, update primary if we have one
+    const primaryMachine = getMachineByType('primary');
+    if (primaryMachine) {
+      newDnsRoleInstalled.primary = isInstalled;
+    }
+    
+    // Update secondary if we have one and response indicates it
+    const secondaryMachine = getMachineByType('secondary');
+    if (secondaryMachine && responseData.secondary_installed !== undefined) {
+      newDnsRoleInstalled.secondary = responseData.secondary_installed === true || 
+                                      responseData.secondary_installed === "true";
+    }
+    
+    console.log('DNS Configuration: Updated DNS role installed status:', newDnsRoleInstalled);
+    
+    setDnsRoleInstalled(newDnsRoleInstalled);
+    setLoading(false);
+    setCheckingStatus(false);
+    
+    // Check if installation is required
+    const requiresInstallation = responseData.requires_installation === true || 
+                                 responseData.requires_installation === "true";
+    
+    console.log('DNS Configuration: Requires installation:', requiresInstallation);
+    
+    // Check if we have any installed DNS servers
+    const hasInstalledPrimary = newDnsRoleInstalled.primary === true;
+    const hasInstalledSecondary = newDnsRoleInstalled.secondary === true;
+    const hasInstalledAny = hasInstalledPrimary || hasInstalledSecondary;
+    
+    console.log('DNS Configuration: Has installed any:', hasInstalledAny);
+    
+    if (requiresInstallation && !hasInstalledAny) {
+      console.log('DNS Configuration: Showing install modal (requires installation and no DNS installed)');
+      setShowInstallModal(true);
+    } else if (hasInstalledAny) {
+      console.log('DNS Configuration: DNS is installed, updating status and fetching details');
+      updateInstallationStatus('dns', INSTALLATION_STATUS.INSTALLED, 100, 'DNS server is installed');
+      setShowInstallModal(false);
       
-      const requiresInstallation = responseData.requires_installation === true;
-      const hasPrimary = getMachineByType('primary') && newDnsRoleInstalled.primary === true;
-      const hasSecondary = getMachineByType('secondary') && newDnsRoleInstalled.secondary === true;
+      // Check if we have zones data already
+      const hasZonesPrimary = zones.primary.forward.length > 0 || zones.primary.reverse.length > 0;
+      const hasZonesSecondary = zones.secondary.forward.length > 0 || zones.secondary.reverse.length > 0;
+      const hasZonesAny = hasZonesPrimary || hasZonesSecondary;
       
-      if (requiresInstallation) {
-        setShowInstallModal(true);
-      } else if (hasPrimary || hasSecondary) {
-        updateInstallationStatus('dns', INSTALLATION_STATUS.INSTALLED, 100, 'DNS server is installed');
-        setShowInstallModal(false);
-        
+      console.log('DNS Configuration: Has zones any:', hasZonesAny);
+      console.log('DNS Configuration: Has fetched initial details:', hasFetchedInitialDetails.current);
+      
+      if (!hasZonesAny && !hasFetchedInitialDetails.current) {
+        console.log('DNS Configuration: Fetching DNS details...');
         setTimeout(() => {
           fetchDNSDetails();
         }, 1000);
       }
+    } else {
+      console.log('DNS Configuration: No DNS installed and no installation required - showing DNS not installed UI');
+      // This will trigger the "DNS Server Role Not Installed" UI in renderDNSRoleStatus
     }
   };
 
+  // ============ FIXED handleDNSInstallResponse FUNCTION ============
   const handleDNSInstallResponse = (responseData) => {
-    let installationSuccess = false;
+    console.log('DNS Configuration: Processing DNS installation response:', responseData);
     
-    if (responseData && (responseData.primary_result || responseData.secondary_result)) {
-      const primarySuccess = responseData.primary_success === true || 
-                            (responseData.primary_result && 
-                             (typeof responseData.primary_result === 'string' ? 
-                              responseData.primary_result.toLowerCase().includes('dns role installation done') :
-                              false));
-      
-      const secondarySuccess = responseData.secondary_success === true ||
-                              (responseData.secondary_result && 
-                               (typeof responseData.secondary_result === 'string' ? 
-                                responseData.secondary_result.toLowerCase().includes('dns role installation done') :
-                                false));
-      
-      installationSuccess = primarySuccess || secondarySuccess;
-      
-      if (installationSuccess) {
-        const newDnsRoleInstalled = { ...dnsRoleInstalled };
-        if (primarySuccess) newDnsRoleInstalled.primary = true;
-        if (secondarySuccess) newDnsRoleInstalled.secondary = true;
-        setDnsRoleInstalled(newDnsRoleInstalled);
+    // ALWAYS log the full response for debugging
+    console.log('DNS Configuration: Full installation response:', JSON.stringify(responseData));
+    
+    // Determine if installation was successful
+    let isSuccessful = false;
+    
+    if (!responseData) {
+      console.log('DNS Configuration: No response data');
+      isSuccessful = false;
+    } else if (typeof responseData === 'string') {
+      // Handle string response (like "dns role installation done")
+      const lowerResponse = responseData.toLowerCase();
+      if (lowerResponse.includes('dns role installation done') ||
+          lowerResponse.includes('installation completed') ||
+          lowerResponse.includes('success') ||
+          lowerResponse.includes('installed')) {
+        console.log('DNS Configuration: String response indicates success');
+        isSuccessful = true;
       }
-    } else if (typeof responseData === 'string' || (responseData && responseData.result)) {
-      let resultStr = typeof responseData === 'string' ? responseData : responseData.result;
-      
-      if (typeof resultStr === 'string') {
-        installationSuccess = resultStr.toLowerCase().includes('dns role installation done');
-      } else if (typeof resultStr === 'object') {
-        const dataStr = JSON.stringify(resultStr).toLowerCase();
-        installationSuccess = dataStr.includes('dns role installation done') ||
-                             resultStr.message === 'dns role installation done' ||
-                             resultStr.result === 'dns role installation done';
-      }
-      
-      if (installationSuccess) {
-        setDnsRoleInstalled(prev => ({ ...prev, primary: true }));
-      }
+    } else if (responseData.success === true) {
+      console.log('DNS Configuration: Success flag is true');
+      isSuccessful = true;
+    } else if (responseData.requires_installation === false) {
+      console.log('DNS Configuration: requires_installation is false (installation done)');
+      isSuccessful = true;
+    } else if (responseData.message && responseData.message.toLowerCase().includes('dns installation completed')) {
+      console.log('DNS Configuration: Message indicates DNS installation completed');
+      isSuccessful = true;
     }
     
-    if (installationSuccess) {
+    console.log('DNS Configuration: Installation successful?', isSuccessful);
+    
+    if (isSuccessful) {
+      console.log('DNS Configuration: Installation SUCCESSFUL!');
+      
+      // Update DNS role state
+      const primaryMachine = getMachineByType('primary');
+      const secondaryMachine = getMachineByType('secondary');
+      
+      const newDnsRoleInstalled = { ...dnsRoleInstalled };
+      
+      // Determine which machines to mark as installed
+      if (primaryMachine) {
+        newDnsRoleInstalled.primary = true;
+        console.log('DNS Configuration: Marking primary as installed');
+      }
+      
+      if (secondaryMachine) {
+        newDnsRoleInstalled.secondary = true;
+        console.log('DNS Configuration: Marking secondary as installed');
+      }
+      
+      console.log('DNS Configuration: Updated DNS role state:', newDnsRoleInstalled);
+      setDnsRoleInstalled(newDnsRoleInstalled);
+      
+      // Update installation status
       updateInstallationStatus('dns', INSTALLATION_STATUS.INSTALLED, 100, 'DNS server installed successfully');
+      
+      // Update UI
       setInstallSuccess(true);
       setInstallProgress('Installation completed successfully!');
       setInstalling(false);
+      setError(null); // CRITICAL: Clear any error message
       
+      // Close modal and fetch details
       setTimeout(() => {
         setShowInstallModal(false);
         setInstallSuccess(false);
         setInstallProgress('');
         
+        // Give a moment then fetch DNS details
         setTimeout(() => {
+          console.log('DNS Configuration: Now fetching DNS details...');
           fetchDNSDetails();
-        }, 500);
+        }, 800);
       }, 1200);
+      
     } else {
-      setError(`Installation failed: ${JSON.stringify(responseData)}`);
-      setInstallProgress('Installation failed');
-      setInstalling(false);
-      updateInstallationStatus('dns', INSTALLATION_STATUS.FAILED, 0, 'Installation failed');
+      console.log('DNS Configuration: Installation FAILED or response not recognized');
+      
+      // Double-check: maybe it's a success format we didn't recognize
+      if (responseData && (responseData.success === true || responseData.requires_installation === false)) {
+        console.log('DNS Configuration: Actually, re-checking shows it IS a success!');
+        
+        // Update state anyway
+        const primaryMachine = getMachineByType('primary');
+        const newDnsRoleInstalled = { ...dnsRoleInstalled };
+        if (primaryMachine) newDnsRoleInstalled.primary = true;
+        setDnsRoleInstalled(newDnsRoleInstalled);
+        
+        updateInstallationStatus('dns', INSTALLATION_STATUS.INSTALLED, 100, 'DNS server installed');
+        setInstallSuccess(true);
+        setInstallProgress('Installation completed!');
+        setInstalling(false);
+        setError(null);
+        
+        setTimeout(() => {
+          setShowInstallModal(false);
+          setInstallSuccess(false);
+          setInstallProgress('');
+          
+          setTimeout(() => {
+            fetchDNSDetails();
+          }, 800);
+        }, 1200);
+        
+      } else {
+        // Real failure
+        console.log('DNS Configuration: Setting error message');
+        const errorMsg = typeof responseData === 'string' ? responseData : JSON.stringify(responseData);
+        setError(`Installation failed: ${errorMsg}`);
+        setInstallProgress('Installation failed');
+        setInstalling(false);
+        updateInstallationStatus('dns', INSTALLATION_STATUS.FAILED, 0, 'Installation failed');
+      }
     }
+    
+    // Reset action in progress
+    actionInProgressRef.current = false;
   };
 
   const handleZoneCreationResponse = useCallback((responseData) => {
@@ -1062,18 +1359,19 @@ function DNSConfiguration() {
     let zoneName = '';
     
     if (typeof responseData === 'string') {
-      zoneCreationSuccess = responseData.toLowerCase().includes('created') || 
-                           responseData.toLowerCase().includes('success');
+      const lowerResponse = responseData.toLowerCase();
+      zoneCreationSuccess = lowerResponse.includes('created') || 
+                           lowerResponse.includes('success');
       const match = responseData.match(/Zone\s+['"](.+?)['"]\s+created/) || 
                    responseData.match(/zone\s+['"](.+?)['"]\s+created/i) ||
                    responseData.match(/['"](.+?)['"]\s+created/i);
       zoneName = match ? match[1] : newZoneData.zoneName;
-      console.log('Extracted zone name from string:', zoneName);
+      console.log('DNS Configuration: Extracted zone name from string:', zoneName);
     } else if (typeof responseData === 'object') {
       zoneCreationSuccess = responseData.success === true ||
                            (responseData.message && responseData.message.toLowerCase().includes('created'));
       zoneName = responseData.zone_name || responseData.zoneName || newZoneData.zoneName;
-      console.log('Extracted zone name from object:', zoneName);
+      console.log('DNS Configuration: Extracted zone name from object:', zoneName);
     }
     
     if (zoneCreationSuccess) {
@@ -1096,7 +1394,7 @@ function DNSConfiguration() {
         targetMachine: 'primary'
       });
       
-      console.log(`Zone created successfully, refreshing DNS data in 3 seconds...`);
+      console.log(`DNS Configuration: Zone created successfully, refreshing DNS data in 3 seconds...`);
       setTimeout(() => {
         refreshDNSData();
       }, 3000);
@@ -1120,8 +1418,9 @@ function DNSConfiguration() {
     let recordType = '';
     
     if (typeof responseData === 'string') {
-      recordCreationSuccess = responseData.toLowerCase().includes('created') || 
-                             responseData.toLowerCase().includes('success');
+      const lowerResponse = responseData.toLowerCase();
+      recordCreationSuccess = lowerResponse.includes('created') || 
+                             lowerResponse.includes('success');
       const match = responseData.match(/record\s+['"](.+?)['"]\s+created/) || 
                    responseData.match(/Record\s+['"](.+?)['"]\s+created/i);
       recordName = match ? match[1] : newRecordData.recordName;
@@ -1150,7 +1449,7 @@ function DNSConfiguration() {
         timestamp: Date.now()
       };
       
-      console.log('Adding new record to pending list:', newRecordEntry);
+      console.log('DNS Configuration: Adding new record to pending list:', newRecordEntry);
       setNewlyCreatedRecords(prev => [...prev, newRecordEntry]);
       
       if (selectedZone.zone && (selectedZone.machine || newRecordData.targetMachine)) {
@@ -1175,7 +1474,7 @@ function DNSConfiguration() {
           isNewlyCreated: true
         };
         
-        console.log('Immediately adding record to UI:', newRecord);
+        console.log('DNS Configuration: Immediately adding record to UI:', newRecord);
         setRecords(prev => {
           const exists = prev.some(r => 
             r.name === newRecord.name && 
@@ -1200,7 +1499,7 @@ function DNSConfiguration() {
         targetMachine: selectedZone.machine || 'primary'
       });
       
-      console.log(`Record created successfully, refreshing DNS data in 2 seconds...`);
+      console.log(`DNS Configuration: Record created successfully, refreshing DNS data in 2 seconds...`);
       setTimeout(() => {
         refreshDNSData();
       }, 2000);
@@ -1220,8 +1519,9 @@ function DNSConfiguration() {
     let deletionSuccess = false;
     
     if (typeof responseData === 'string') {
-      deletionSuccess = responseData.toLowerCase().includes('deleted') || 
-                       responseData.toLowerCase().includes('success');
+      const lowerResponse = responseData.toLowerCase();
+      deletionSuccess = lowerResponse.includes('deleted') || 
+                       lowerResponse.includes('success');
     } else if (typeof responseData === 'object') {
       deletionSuccess = responseData.success === true ||
                        (responseData.message && responseData.message.toLowerCase().includes('deleted'));
@@ -1244,6 +1544,8 @@ function DNSConfiguration() {
     }
   };
 
+  // ============ DNS OPERATIONS ============
+
   const fetchDNSDetails = () => {
     if (!isConnected) {
       setError('WebSocket not connected');
@@ -1261,20 +1563,37 @@ function DNSConfiguration() {
     setZonesLoading({ primary: !!primaryMachine, secondary: !!secondaryMachine });
     setError(null);
     
-    const payload = createDualPayload();
-    if (!payload) {
-      setError('Failed to create payload - check machine credentials');
-      setZonesLoading({ primary: false, secondary: false });
-      return;
+    // Send separate commands for each machine
+    const sendCommandForMachine = (machine, machineType) => {
+      const payload = {
+        windows_info: getWindowsInfoForMachine(machine)
+      };
+      
+      if (!payload.windows_info) {
+        console.error(`DNS Configuration: Failed to create payload for ${machineType}`);
+        return;
+      }
+      
+      console.log(`DNS Configuration: SENDING COMMAND: get_dns_details_windows_ansible for ${machineType}`);
+      sendCommandWithFlow('get_dns_details_windows_ansible', payload);
+    };
+    
+    // Send command for primary if exists
+    if (primaryMachine) {
+      sendCommandForMachine(primaryMachine, 'primary');
     }
     
-    console.log('SENDING COMMAND: get_dns_details_windows_ansible (initial)');
-    sendCommand('get_dns_details_windows_ansible', payload);
+    // Send command for secondary if exists (with delay to avoid command collision)
+    if (secondaryMachine) {
+      setTimeout(() => {
+        sendCommandForMachine(secondaryMachine, 'secondary');
+      }, 1000);
+    }
   };
 
   const installDNSRole = () => {
     if (installations.dns?.status === INSTALLATION_STATUS.INSTALLING) {
-      console.log('Installation already in progress');
+      console.log('DNS Configuration: Installation already in progress');
       return;
     }
 
@@ -1286,14 +1605,6 @@ function DNSConfiguration() {
       return;
     }
 
-    const payload = createDualPayload();
-    if (!payload) {
-      setError('Failed to create payload for installation');
-      return;
-    }
-    
-    console.log('SENDING COMMAND: install_dns_role_windows_ansible');
-    
     setInstalling(true);
     setInstallSuccess(false);
     setInstallProgress('Starting DNS role installation...');
@@ -1301,7 +1612,32 @@ function DNSConfiguration() {
     
     updateInstallationStatus('dns', INSTALLATION_STATUS.INSTALLING, 0, 'Starting DNS installation...');
     
-    sendCommand('install_dns_role_windows_ansible', payload);
+    // Send separate installation commands for each machine
+    const sendInstallCommandForMachine = (machine, machineType) => {
+      const payload = {
+        windows_info: getWindowsInfoForMachine(machine)
+      };
+      
+      if (!payload.windows_info) {
+        console.error(`DNS Configuration: Failed to create payload for ${machineType} installation`);
+        return;
+      }
+      
+      console.log(`DNS Configuration: SENDING COMMAND: install_dns_role_windows_ansible for ${machineType}`);
+      sendCommandWithFlow('install_dns_role_windows_ansible', payload);
+    };
+    
+    // Install on primary first
+    if (primaryMachine) {
+      sendInstallCommandForMachine(primaryMachine, 'primary');
+    }
+    
+    // Install on secondary after a delay (if exists)
+    if (secondaryMachine) {
+      setTimeout(() => {
+        sendInstallCommandForMachine(secondaryMachine, 'secondary');
+      }, 2000);
+    }
   };
 
   const createZone = () => {
@@ -1331,7 +1667,7 @@ function DNSConfiguration() {
       additionalData = { zone_name: `${ipParts.slice(0, 3).join('.')}.in-addr.arpa` };
     }
     
-    console.log(`SENDING COMMAND: ${command} for ${newZoneData.targetMachine}`);
+    console.log(`DNS Configuration: SENDING COMMAND: ${command} for ${newZoneData.targetMachine}`);
     
     const payload = createPayload(additionalData, newZoneData.targetMachine);
     if (!payload) {
@@ -1341,7 +1677,7 @@ function DNSConfiguration() {
       return;
     }
     
-    sendCommand(command, payload);
+    sendCommandWithFlow(command, payload);
   };
 
   const createRecord = () => {
@@ -1410,7 +1746,7 @@ function DNSConfiguration() {
       return;
     }
     
-    console.log(`SENDING COMMAND: ${command} for ${newRecordData.targetMachine}`);
+    console.log(`DNS Configuration: SENDING COMMAND: ${command} for ${newRecordData.targetMachine}`);
     
     const payload = createPayload(additionalData, newRecordData.targetMachine);
     if (!payload) {
@@ -1420,7 +1756,7 @@ function DNSConfiguration() {
       return;
     }
     
-    sendCommand(command, payload);
+    sendCommandWithFlow(command, payload);
   };
 
   const deleteZone = (zoneName, zoneType, machineType) => {
@@ -1428,7 +1764,7 @@ function DNSConfiguration() {
       return;
     }
 
-    console.log(`Deleting DNS zone: ${zoneName} from ${machineType}`);
+    console.log(`DNS Configuration: Deleting DNS zone: ${zoneName} from ${machineType}`);
     setError(null);
     
     const command = zoneType === 'Reverse' ? 
@@ -1443,9 +1779,52 @@ function DNSConfiguration() {
       return;
     }
     
-    console.log(`SENDING COMMAND: ${command}`);
-    sendCommand(command, payload);
+    console.log(`DNS Configuration: SENDING COMMAND: ${command}`);
+    sendCommandWithFlow(command, payload);
   };
+
+  // ============ DNS CHECK FUNCTION ============
+
+  const checkDNSOnMachines = (machinesList = dnsMachinesRef.current) => {
+    const primaryMachine = getMachineByType('primary');
+    const secondaryMachine = getMachineByType('secondary');
+    
+    if (!primaryMachine && !secondaryMachine) {
+      setError('No DNS machines found');
+      setLoading(false);
+      setCheckingStatus(false);
+      return;
+    }
+    
+    // Send separate check commands for each machine
+    const sendCheckCommandForMachine = (machine, machineType) => {
+      const payload = {
+        windows_info: getWindowsInfoForMachine(machine)
+      };
+      
+      if (!payload.windows_info) {
+        console.error(`DNS Configuration: Failed to create payload for ${machineType} check`);
+        return;
+      }
+      
+      console.log(`DNS Configuration: SENDING COMMAND: check_dns_role_installed_windows_ansible for ${machineType}`);
+      sendCommandWithFlow('check_dns_role_installed_windows_ansible', payload);
+    };
+    
+    // Check primary first
+    if (primaryMachine) {
+      sendCheckCommandForMachine(primaryMachine, 'primary');
+    }
+    
+    // Check secondary after a delay (if exists)
+    if (secondaryMachine) {
+      setTimeout(() => {
+        sendCheckCommandForMachine(secondaryMachine, 'secondary');
+      }, 1000);
+    }
+  };
+
+  // ============ RENDER FUNCTIONS ============
 
   const getAllZones = useCallback(() => {
     const allZones = [];
@@ -1494,7 +1873,7 @@ function DNSConfiguration() {
     
     const sortedZones = [...filteredZones].sort((a, b) => a.name.localeCompare(b.name));
     
-    console.log(`RENDERING ${zoneType} zones:`, sortedZones.length, 'zones');
+    console.log(`DNS Configuration: RENDERING ${zoneType} zones:`, sortedZones.length, 'zones');
     
     return (
       <div className="zone-list-container">
@@ -1518,17 +1897,17 @@ function DNSConfiguration() {
                 });
                 setShowCreateZoneModal(true);
               }}
-              disabled={actionLoading || actionInProgressRef.current}
+              disabled={actionLoading || actionInProgressRef.current || machinesLoading || commandInProgressRef.current}
             >
               Create New Zone
             </button>
             <button 
               className="btn-refresh-zones"
               onClick={() => {
-                console.log('Manual refresh triggered');
+                console.log('DNS Configuration: Manual refresh triggered');
                 refreshDNSData();
               }}
-              disabled={zonesLoading.primary || zonesLoading.secondary || actionLoading || refreshing || actionInProgressRef.current}
+              disabled={zonesLoading.primary || zonesLoading.secondary || actionLoading || refreshing || actionInProgressRef.current || machinesLoading || commandInProgressRef.current}
             >
               {refreshing ? (
                 <>
@@ -1537,10 +1916,22 @@ function DNSConfiguration() {
                 </>
               ) : 'Refresh Zones'}
             </button>
+            <button 
+              className="btn-refresh-machines"
+              onClick={fetchMachineInfo}
+              disabled={machinesLoading || actionLoading || actionInProgressRef.current || commandInProgressRef.current}
+            >
+              {machinesLoading ? 'Loading Machines...' : 'Refresh Machines'}
+            </button>
           </div>
         </div>
         
-        {(zonesLoading.primary || zonesLoading.secondary) ? (
+        {machinesLoading ? (
+          <div className="loading-container">
+            <div className="spinner"></div>
+            <p>Loading machine information...</p>
+          </div>
+        ) : (zonesLoading.primary || zonesLoading.secondary) ? (
           <div className="loading-container">
             <div className="spinner"></div>
             <p>Loading zones...</p>
@@ -1550,6 +1941,7 @@ function DNSConfiguration() {
             <p>No {zoneType} lookup zones found. Create a new zone to get started.</p>
             {refreshing && <p className="small-text">Refreshing data...</p>}
             {actionInProgressRef.current && <p className="small-text">Action in progress...</p>}
+            {commandInProgressRef.current && <p className="small-text">Command in progress...</p>}
           </div>
         ) : (
           <div className="zone-table-container">
@@ -1562,6 +1954,9 @@ function DNSConfiguration() {
               )}
               {actionInProgressRef.current && (
                 <span className="action-in-progress">Action in progress...</span>
+              )}
+              {commandInProgressRef.current && (
+                <span className="command-in-progress">Command in progress...</span>
               )}
               {newlyCreatedZones.length > 0 && (
                 <span className="new-zones-pending">
@@ -1617,14 +2012,14 @@ function DNSConfiguration() {
                             fetchZoneRecords(zone.name, zone.machineType, zoneType);
                             setActiveTab('records');
                           }}
-                          disabled={actionLoading || actionInProgressRef.current}
+                          disabled={actionLoading || actionInProgressRef.current || commandInProgressRef.current}
                         >
                           View Records
                         </button>
                         <button 
                           className="btn-delete-zone"
                           onClick={() => deleteZone(zone.name, zone.type, zone.machineType)}
-                          disabled={actionLoading || actionInProgressRef.current}
+                          disabled={actionLoading || actionInProgressRef.current || commandInProgressRef.current}
                         >
                           Delete
                         </button>
@@ -1638,7 +2033,7 @@ function DNSConfiguration() {
         )}
       </div>
     );
-  }, [getAllZones, zonesLoading, actionLoading, refreshing, fetchZoneRecords, newlyCreatedZones]);
+  }, [getAllZones, zonesLoading, actionLoading, refreshing, fetchZoneRecords, newlyCreatedZones, machinesLoading, fetchMachineInfo, commandInProgressRef.current]);
 
   const renderDNSRecords = useCallback(() => {
     if (!selectedZone.zone) {
@@ -1679,14 +2074,14 @@ function DNSConfiguration() {
                 });
                 setShowCreateRecordModal(true);
               }}
-              disabled={actionLoading || actionInProgressRef.current}
+              disabled={actionLoading || actionInProgressRef.current || machinesLoading || commandInProgressRef.current}
             >
               Create New Record
             </button>
             <button 
               className="btn-refresh-records"
               onClick={() => fetchZoneRecords(selectedZone.zone, selectedZone.machine, selectedZone.zoneType, true, true)}
-              disabled={recordsLoading || actionLoading || actionInProgressRef.current}
+              disabled={recordsLoading || actionLoading || actionInProgressRef.current || machinesLoading || commandInProgressRef.current}
             >
               {recordsLoading ? (
                 <>
@@ -1714,6 +2109,7 @@ function DNSConfiguration() {
             <p>No records found in this zone. Create a new record to get started.</p>
             <p className="small-text">If you just created a record, it should appear automatically within a few seconds.</p>
             {actionInProgressRef.current && <p className="small-text">Action in progress...</p>}
+            {commandInProgressRef.current && <p className="small-text">Command in progress...</p>}
             {newlyCreatedRecords.length > 0 && (
               <p className="small-text">
                 {newlyCreatedRecords.length} new record(s) pending confirmation
@@ -1779,12 +2175,25 @@ function DNSConfiguration() {
         )}
       </div>
     );
-  }, [selectedZone, records, recordsLoading, actionLoading, fetchZoneRecords, newlyCreatedRecords]);
+  }, [selectedZone, records, recordsLoading, actionLoading, fetchZoneRecords, newlyCreatedRecords, machinesLoading, commandInProgressRef.current]);
 
   const renderDNSRoleStatus = () => {
     const primaryMachine = getMachineByType('primary');
     const secondaryMachine = getMachineByType('secondary');
     
+    if (machinesLoading) {
+      return (
+        <div className="status-checking">
+          <div className="spinner"></div>
+          <span>Loading machine information...</span>
+          <div className="connection-status">
+            <span className={`status-indicator ${isConnected ? 'connected' : 'disconnected'}`}></span>
+            WebSocket: {isConnected ? 'Connected' : 'Disconnected'}
+          </div>
+        </div>
+      );
+    }
+
     if (loading && (primaryMachine || secondaryMachine)) {
       return (
         <div className="status-checking">
@@ -1806,6 +2215,13 @@ function DNSConfiguration() {
     const hasZonesSecondary = zones.secondary.forward.length > 0 || zones.secondary.reverse.length > 0;
     const hasZonesAny = hasZonesPrimary || hasZonesSecondary;
     
+    console.log('DNS Configuration: Render DNS role status check:');
+    console.log('  - hasInstalledPrimary:', hasInstalledPrimary);
+    console.log('  - hasInstalledSecondary:', hasInstalledSecondary);
+    console.log('  - hasInstalledAny:', hasInstalledAny);
+    console.log('  - hasZonesAny:', hasZonesAny);
+    console.log('  - hasFetchedInitialDetails:', hasFetchedInitialDetails.current);
+    
     if (!hasInstalledAny && (primaryMachine || secondaryMachine)) {
       return (
         <div className="dns-not-installed">
@@ -1815,18 +2231,25 @@ function DNSConfiguration() {
             <p>DNS server role is not installed on configured machines.</p>
             <div className="windows-info-details">
               {primaryMachine && (
-                <p><strong>Primary:</strong> {primaryMachine.name} ({primaryMachine.ip}) - Status: {dnsRoleInstalled.primary === null ? 'Checking...' : dnsRoleInstalled.primary === true ? 'Installed' : 'Not installed'}</p>
+                <p><strong>Primary:</strong> {primaryMachine.name || 'Unknown'} ({primaryMachine.ip}) - Status: {dnsRoleInstalled.primary === null ? 'Checking...' : dnsRoleInstalled.primary === true ? 'Installed' : 'Not installed'}</p>
               )}
               {secondaryMachine && (
-                <p><strong>Secondary:</strong> {secondaryMachine.name} ({secondaryMachine.ip}) - Status: {dnsRoleInstalled.secondary === null ? 'Checking...' : dnsRoleInstalled.secondary === true ? 'Installed' : 'Not installed'}</p>
+                <p><strong>Secondary:</strong> {secondaryMachine.name || 'Unknown'} ({secondaryMachine.ip}) - Status: {dnsRoleInstalled.secondary === null ? 'Checking...' : dnsRoleInstalled.secondary === true ? 'Installed' : 'Not installed'}</p>
               )}
             </div>
             <button 
               className="btn-install-dns"
               onClick={() => setShowInstallModal(true)}
-              disabled={installing}
+              disabled={installing || machinesLoading || commandInProgressRef.current}
             >
               Install DNS Server Role
+            </button>
+            <button 
+              className="btn-refresh-machines-small"
+              onClick={fetchMachineInfo}
+              disabled={machinesLoading || commandInProgressRef.current}
+            >
+              {machinesLoading ? 'Loading...' : 'Refresh Machines'}
             </button>
           </div>
         </div>
@@ -1842,18 +2265,25 @@ function DNSConfiguration() {
             <p>DNS server is ready. Load zones to start managing.</p>
             <div className="windows-info-details">
               {primaryMachine && hasInstalledPrimary && (
-                <p><strong>Primary:</strong> {primaryMachine.name} ({primaryMachine.ip}) - Status: Installed</p>
+                <p><strong>Primary:</strong> {primaryMachine.name || 'Unknown'} ({primaryMachine.ip}) - Status: Installed</p>
               )}
               {secondaryMachine && hasInstalledSecondary && (
-                <p><strong>Secondary:</strong> {secondaryMachine.name} ({secondaryMachine.ip}) - Status: Installed</p>
+                <p><strong>Secondary:</strong> {secondaryMachine.name || 'Unknown'} ({secondaryMachine.ip}) - Status: Installed</p>
               )}
             </div>
             <button 
               className="btn-fetch-details"
               onClick={fetchDNSDetails}
-              disabled={zonesLoading.primary || zonesLoading.secondary}
+              disabled={zonesLoading.primary || zonesLoading.secondary || machinesLoading || commandInProgressRef.current}
             >
               {(zonesLoading.primary || zonesLoading.secondary) ? 'Loading Zones...' : 'Load DNS Zones'}
+            </button>
+            <button 
+              className="btn-refresh-machines-small"
+              onClick={fetchMachineInfo}
+              disabled={machinesLoading || commandInProgressRef.current}
+            >
+              {machinesLoading ? 'Loading...' : 'Refresh Machines'}
             </button>
           </div>
         </div>
@@ -1878,7 +2308,7 @@ function DNSConfiguration() {
           <div className="machine-info-item">
             <div className="machine-status">
               <span className={`status-dot ${dnsRoleInstalled.primary === true ? 'installed' : 'not-installed'}`}></span>
-              <span className="machine-name">Primary: {primaryMachine.name}</span>
+              <span className="machine-name">Primary: {primaryMachine.name || 'Unknown'}</span>
             </div>
             <div className="machine-details">
               <span className="machine-ip">IP: {primaryMachine.ip}</span>
@@ -1892,7 +2322,7 @@ function DNSConfiguration() {
           <div className="machine-info-item">
             <div className="machine-status">
               <span className={`status-dot ${dnsRoleInstalled.secondary === true ? 'installed' : 'not-installed'}`}></span>
-              <span className="machine-name">Secondary: {secondaryMachine.name}</span>
+              <span className="machine-name">Secondary: {secondaryMachine.name || 'Unknown'}</span>
             </div>
             <div className="machine-details">
               <span className="machine-ip">IP: {secondaryMachine.ip}</span>
@@ -1902,6 +2332,15 @@ function DNSConfiguration() {
             </div>
           </div>
         )}
+        <div className="machine-actions">
+          <button 
+            className="btn-refresh-machines-small"
+            onClick={fetchMachineInfo}
+            disabled={machinesLoading || commandInProgressRef.current}
+          >
+            {machinesLoading ? 'Refreshing...' : 'Refresh Machines'}
+          </button>
+        </div>
       </div>
     );
   };
@@ -1938,9 +2377,10 @@ function DNSConfiguration() {
                 <div className="modal-stat-item">
                   <button 
                     className="modal-refresh-btn"
-                    onClick={handleRefreshMachines}
+                    onClick={fetchMachineInfo}
+                    disabled={machinesLoading || commandInProgressRef.current}
                   >
-                    Refresh Machines
+                    {machinesLoading ? 'Loading...' : 'Refresh Machines'}
                   </button>
                 </div>
               </div>
@@ -1959,10 +2399,11 @@ function DNSConfiguration() {
                   className="modal-btn-secondary"
                   onClick={() => {
                     setShowNoDnsModal(false);
-                    handleRefreshMachines();
+                    fetchMachineInfo();
                   }}
+                  disabled={machinesLoading || commandInProgressRef.current}
                 >
-                  Refresh Machine List
+                  {machinesLoading ? 'Loading...' : 'Refresh Machine List'}
                 </button>
                 <button 
                   className="modal-btn-tertiary"
@@ -1978,84 +2419,56 @@ function DNSConfiguration() {
     );
   };
 
+  // ============ USE EFFECTS ============
+
   useEffect(() => {
-    if (!listenerAdded.current) {
-      console.log(' DNS Component Mounted - Setting up WebSocket listener');
+    console.log('DNS Configuration Component Mounted');
+    mountedRef.current = true;
+    
+    // Fetch machines immediately on mount
+    fetchMachineInfo();
+    
+    return () => {
+      console.log('DNS Configuration Component Unmounting');
+      mountedRef.current = false;
+      if (refreshTimeoutRef.current) {
+        clearTimeout(refreshTimeoutRef.current);
+        refreshTimeoutRef.current = null;
+      }
+      if (autoRefreshTimeoutRef.current) {
+        clearTimeout(autoRefreshTimeoutRef.current);
+        autoRefreshTimeoutRef.current = null;
+      }
+      isFetchingRef.current = false;
+      fetchInProgressRef.current = false;
+      commandInProgressRef.current = false;
+      pendingCommandsRef.current = [];
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!machineInfoListenerRef.current && mountedRef.current) {
+      console.log('DNS Configuration: Setting up WebSocket listener');
       const removeListener = addListener(handleWebSocketMessage);
-      listenerAdded.current = true;
+      machineInfoListenerRef.current = true;
       
       return () => {
-        if (removeListener) removeListener();
-        listenerAdded.current = false;
-        if (refreshTimeoutRef.current) {
-          clearTimeout(refreshTimeoutRef.current);
+        if (removeListener) {
+          removeListener();
         }
-        if (autoRefreshTimeoutRef.current) {
-          clearTimeout(autoRefreshTimeoutRef.current);
-        }
+        machineInfoListenerRef.current = false;
       };
     }
   }, [addListener, handleWebSocketMessage]);
 
   useEffect(() => {
-    if (initialCheckDone.current) {
-      return;
-    }
-    
-    const performInitialCheck = () => {
-      console.log('Performing initial DNS check...');
-      
-      setCheckingStatus(true);
-      setLoading(true);
-      
-      if (installations.dns?.status === INSTALLATION_STATUS.INSTALLING) {
-        console.log('DNS is installing globally');
-        setCheckingStatus(false);
-        setLoading(false);
-        initialCheckDone.current = true;
-        return;
-      }
-      
-      if (isConnected) {
-        console.log('WebSocket connected, fetching machine info...');
-        getDnsMachinesFromDatabase();
-        initialCheckDone.current = true;
-      } else {
-        console.log('WebSocket not connected, retrying...');
-        setTimeout(performInitialCheck, 1000);
-      }
-    };
-    
-    performInitialCheck();
-    
-  }, [isConnected, installations.dns]);
-
-  useEffect(() => {
-    if (dnsMachines.length > 0) {
-      console.log('DNS machines loaded, checking DNS status...');
+    if (dnsMachines.length > 0 && !machinesLoading) {
+      console.log('DNS Configuration: DNS machines loaded, checking DNS status...');
       checkDNSOnMachines();
     }
-  }, [dnsMachines]);
+  }, [dnsMachines, machinesLoading]);
 
-  const checkDNSOnMachines = () => {
-    const primaryMachine = getMachineByType('primary');
-    const secondaryMachine = getMachineByType('secondary');
-    
-    if (!primaryMachine && !secondaryMachine) {
-      setError('No DNS machines found');
-      return;
-    }
-    
-    const payload = createDualPayload();
-    
-    if (!payload) {
-      setError('Failed to create payload for DNS check');
-      return;
-    }
-    
-    console.log('SENDING COMMAND: check_dns_role_installed_windows_ansible');
-    sendCommand('check_dns_role_installed_windows_ansible', payload);
-  };
+  // ============ RENDER COMPONENT ============
 
   return (
     <div className="dns-configuration">
@@ -2066,7 +2479,7 @@ function DNSConfiguration() {
             <button
               key={item}
               className={`nav-button ${item === 'DNS Configuration' ? 'nav-button-active' : 'nav-button-inactive'}`}
-              disabled={actionLoading || installing || actionInProgressRef.current}
+              disabled={actionLoading || installing || actionInProgressRef.current || machinesLoading || commandInProgressRef.current}
             >
               {item}
             </button>
@@ -2086,22 +2499,31 @@ function DNSConfiguration() {
               <button 
                 className="btn-refresh-main"
                 onClick={refreshDNSData}
-                disabled={zonesLoading.primary || zonesLoading.secondary || refreshing || !isConnected || actionInProgressRef.current}
+                disabled={zonesLoading.primary || zonesLoading.secondary || refreshing || !isConnected || actionInProgressRef.current || machinesLoading || commandInProgressRef.current}
               >
                 {refreshing ? (
                   <>
                     <span className="refresh-spinner"></span>
                     Refreshing...
                   </>
-                ) : (
-                  <>
-                    Refresh DNS Data
-                  </>
-                )}
+                ) : 'Refresh DNS Data'}
+              </button>
+              <button 
+                className="btn-refresh-machines-main"
+                onClick={fetchMachineInfo}
+                disabled={machinesLoading || actionInProgressRef.current || commandInProgressRef.current}
+              >
+                {machinesLoading ? 'Loading Machines...' : 'Refresh Machines'}
               </button>
               {lastCommandTimeRef.current && (
                 <div className="last-refresh-time">
                   Last refreshed: {formatLastRefreshTime()}
+                </div>
+              )}
+              {commandInProgressRef.current && (
+                <div className="command-progress-indicator">
+                  <span className="command-spinner"></span>
+                  Command in progress...
                 </div>
               )}
             </div>
@@ -2109,6 +2531,8 @@ function DNSConfiguration() {
           <div className="connection-status-small">
             <span className={`status-indicator ${isConnected ? 'connected' : 'disconnected'}`}></span>
             WebSocket: {isConnected ? 'Connected' : 'Disconnected'}
+            {machinesLoading && <span className="machines-loading"> | Loading machines...</span>}
+            {commandInProgressRef.current && <span className="command-loading"> | Command in progress...</span>}
           </div>
         </div>
 
@@ -2121,28 +2545,28 @@ function DNSConfiguration() {
               <button
                 className={`tab-btn ${activeTab === 'forward-zones' ? 'active' : ''}`}
                 onClick={() => setActiveTab('forward-zones')}
-                disabled={actionLoading || actionInProgressRef.current}
+                disabled={actionLoading || actionInProgressRef.current || machinesLoading || commandInProgressRef.current}
               >
                 Forward Lookup Zones
               </button>
               <button
                 className={`tab-btn ${activeTab === 'reverse-zones' ? 'active' : ''}`}
                 onClick={() => setActiveTab('reverse-zones')}
-                disabled={actionLoading || actionInProgressRef.current}
+                disabled={actionLoading || actionInProgressRef.current || machinesLoading || commandInProgressRef.current}
               >
                 Reverse Lookup Zones
               </button>
               <button
                 className={`tab-btn ${activeTab === 'records' ? 'active' : ''}`}
                 onClick={() => setActiveTab('records')}
-                disabled={!selectedZone.zone || actionLoading || actionInProgressRef.current}
+                disabled={!selectedZone.zone || actionLoading || actionInProgressRef.current || machinesLoading || commandInProgressRef.current}
               >
                 DNS Records
               </button>
               <button
                 className={`tab-btn ${activeTab === 'settings' ? 'active' : ''}`}
                 onClick={() => setActiveTab('settings')}
-                disabled={actionLoading || actionInProgressRef.current}
+                disabled={actionLoading || actionInProgressRef.current || machinesLoading || commandInProgressRef.current}
               >
                 DNS Settings
               </button>
@@ -2186,19 +2610,16 @@ function DNSConfiguration() {
                     <button 
                       className="btn-refresh"
                       onClick={refreshDNSData}
-                      disabled={zonesLoading.primary || zonesLoading.secondary || actionLoading || refreshing || actionInProgressRef.current}
+                      disabled={zonesLoading.primary || zonesLoading.secondary || actionLoading || refreshing || actionInProgressRef.current || machinesLoading || commandInProgressRef.current}
                     >
                       {refreshing ? 'Refreshing...' : 'Refresh DNS Data'}
                     </button>
                     <button 
                       className="btn-refresh-machines"
-                      onClick={() => {
-                        getDnsMachinesFromDatabase();
-                        setCheckingStatus(true);
-                      }}
-                      disabled={actionLoading || actionInProgressRef.current}
+                      onClick={fetchMachineInfo}
+                      disabled={actionLoading || actionInProgressRef.current || machinesLoading || commandInProgressRef.current}
                     >
-                      Refresh Machine List
+                      {machinesLoading ? 'Loading...' : 'Refresh Machine List'}
                     </button>
                   </div>
                 </div>
@@ -2301,14 +2722,14 @@ function DNSConfiguration() {
                     <button 
                       className="btn-cancel"
                       onClick={() => setShowInstallModal(false)}
-                      disabled={installing}
+                      disabled={installing || commandInProgressRef.current}
                     >
                       Cancel
                     </button>
                     <button 
                       className="btn-install"
                       onClick={installDNSRole}
-                      disabled={installing || installations.dns?.status === INSTALLATION_STATUS.INSTALLING}
+                      disabled={installing || installations.dns?.status === INSTALLATION_STATUS.INSTALLING || machinesLoading || commandInProgressRef.current}
                     >
                       {installations.dns?.status === INSTALLATION_STATUS.INSTALLING ? 'Installing...' : 'Begin Installation on All Machines'}
                     </button>
@@ -2328,7 +2749,7 @@ function DNSConfiguration() {
               <button 
                 className="btn-close-modal"
                 onClick={() => setShowCreateZoneModal(false)}
-                disabled={actionLoading || actionInProgressRef.current}
+                disabled={actionLoading || actionInProgressRef.current || machinesLoading || commandInProgressRef.current}
               >
                 ×
               </button>
@@ -2341,7 +2762,7 @@ function DNSConfiguration() {
                   className="form-control"
                   value={newZoneData.targetMachine}
                   onChange={(e) => setNewZoneData({...newZoneData, targetMachine: e.target.value})}
-                  disabled={actionLoading || actionInProgressRef.current}
+                  disabled={actionLoading || actionInProgressRef.current || machinesLoading || commandInProgressRef.current}
                 >
                   {getMachineByType('primary') && <option value="primary">Primary DNS Server</option>}
                   {getMachineByType('secondary') && <option value="secondary">Secondary DNS Server</option>}
@@ -2354,14 +2775,14 @@ function DNSConfiguration() {
                   <button
                     className={`zone-type-btn ${newZoneData.zoneType === 'forward' ? 'active' : ''}`}
                     onClick={() => setNewZoneData({...newZoneData, zoneType: 'forward'})}
-                    disabled={actionLoading || actionInProgressRef.current}
+                    disabled={actionLoading || actionInProgressRef.current || machinesLoading || commandInProgressRef.current}
                   >
                     Forward Lookup Zone
                   </button>
                   <button
                     className={`zone-type-btn ${newZoneData.zoneType === 'reverse' ? 'active' : ''}`}
                     onClick={() => setNewZoneData({...newZoneData, zoneType: 'reverse'})}
-                    disabled={actionLoading || actionInProgressRef.current}
+                    disabled={actionLoading || actionInProgressRef.current || machinesLoading || commandInProgressRef.current}
                   >
                     Reverse Lookup Zone
                   </button>
@@ -2378,7 +2799,7 @@ function DNSConfiguration() {
                   placeholder={newZoneData.zoneType === 'forward' ? 'example.com' : '192.168.1.0'}
                   value={newZoneData.zoneName}
                   onChange={(e) => setNewZoneData({...newZoneData, zoneName: e.target.value})}
-                  disabled={actionLoading || actionInProgressRef.current}
+                  disabled={actionLoading || actionInProgressRef.current || machinesLoading || commandInProgressRef.current}
                 />
                 {newZoneData.zoneType === 'reverse' && (
                   <p className="help-text">
@@ -2393,7 +2814,7 @@ function DNSConfiguration() {
                   className="form-control"
                   value={newZoneData.dynamicUpdate}
                   onChange={(e) => setNewZoneData({...newZoneData, dynamicUpdate: e.target.value})}
-                  disabled={actionLoading || actionInProgressRef.current}
+                  disabled={actionLoading || actionInProgressRef.current || machinesLoading || commandInProgressRef.current}
                 >
                   <option value="Secure">Secure only</option>
                   <option value="NonSecure">Nonsecure and secure</option>
@@ -2418,14 +2839,14 @@ function DNSConfiguration() {
                 <button 
                   className="btn-cancel"
                   onClick={() => setShowCreateZoneModal(false)}
-                  disabled={actionLoading || actionInProgressRef.current}
+                  disabled={actionLoading || actionInProgressRef.current || machinesLoading || commandInProgressRef.current}
                 >
                   Cancel
                 </button>
                 <button 
                   className="btn-create"
                   onClick={createZone}
-                  disabled={actionLoading || !newZoneData.zoneName || actionInProgressRef.current}
+                  disabled={actionLoading || !newZoneData.zoneName || actionInProgressRef.current || machinesLoading || commandInProgressRef.current}
                 >
                   {actionLoading ? 'Creating Zone...' : 'Create Zone'}
                 </button>
@@ -2443,7 +2864,7 @@ function DNSConfiguration() {
               <button 
                 className="btn-close-modal"
                 onClick={() => setShowCreateRecordModal(false)}
-                disabled={actionLoading || actionInProgressRef.current}
+                disabled={actionLoading || actionInProgressRef.current || machinesLoading || commandInProgressRef.current}
               >
                 ×
               </button>
@@ -2456,7 +2877,7 @@ function DNSConfiguration() {
                   className="form-control"
                   value={newRecordData.targetMachine}
                   onChange={(e) => setNewRecordData({...newRecordData, targetMachine: e.target.value})}
-                  disabled={actionLoading || actionInProgressRef.current}
+                  disabled={actionLoading || actionInProgressRef.current || machinesLoading || commandInProgressRef.current}
                 >
                   {getMachineByType('primary') && <option value="primary">Primary DNS Server</option>}
                   {getMachineByType('secondary') && <option value="secondary">Secondary DNS Server</option>}
@@ -2469,7 +2890,7 @@ function DNSConfiguration() {
                   className="form-control"
                   value={newRecordData.recordType}
                   onChange={(e) => setNewRecordData({...newRecordData, recordType: e.target.value})}
-                  disabled={actionLoading || actionInProgressRef.current}
+                  disabled={actionLoading || actionInProgressRef.current || machinesLoading || commandInProgressRef.current}
                 >
                   <option value="A">A (Host) Record</option>
                   <option value="CNAME">CNAME (Alias) Record</option>
@@ -2488,7 +2909,7 @@ function DNSConfiguration() {
                     placeholder={newRecordData.recordType === 'A' ? 'server1' : 'mail'}
                     value={newRecordData.recordName}
                     onChange={(e) => setNewRecordData({...newRecordData, recordName: e.target.value})}
-                    disabled={actionLoading || actionInProgressRef.current}
+                    disabled={actionLoading || actionInProgressRef.current || machinesLoading || commandInProgressRef.current}
                   />
                 </div>
               )}
@@ -2502,7 +2923,7 @@ function DNSConfiguration() {
                     placeholder={newRecordData.recordType === 'A' ? '192.168.1.10' : 'server1.example.com'}
                     value={newRecordData.recordValue}
                     onChange={(e) => setNewRecordData({...newRecordData, recordValue: e.target.value})}
-                    disabled={actionLoading || actionInProgressRef.current}
+                    disabled={actionLoading || actionInProgressRef.current || machinesLoading || commandInProgressRef.current}
                   />
                 </div>
               )}
@@ -2517,7 +2938,7 @@ function DNSConfiguration() {
                       placeholder="192.168.1.10"
                       value={newRecordData.recordIp}
                       onChange={(e) => setNewRecordData({...newRecordData, recordIp: e.target.value})}
-                      disabled={actionLoading || actionInProgressRef.current}
+                      disabled={actionLoading || actionInProgressRef.current || machinesLoading || commandInProgressRef.current}
                     />
                   </div>
                   <div className="form-group">
@@ -2528,7 +2949,7 @@ function DNSConfiguration() {
                       placeholder="server1.example.com"
                       value={newRecordData.recordValue}
                       onChange={(e) => setNewRecordData({...newRecordData, recordValue: e.target.value})}
-                      disabled={actionLoading || actionInProgressRef.current}
+                      disabled={actionLoading || actionInProgressRef.current || machinesLoading || commandInProgressRef.current}
                     />
                   </div>
                 </>
@@ -2542,7 +2963,7 @@ function DNSConfiguration() {
                     placeholder={newRecordData.recordType === 'MX' ? '10 mail.example.com' : 'v=spf1 mx ~all'}
                     value={newRecordData.recordValue}
                     onChange={(e) => setNewRecordData({...newRecordData, recordValue: e.target.value})}
-                    disabled={actionLoading || actionInProgressRef.current}
+                    disabled={actionLoading || actionInProgressRef.current || machinesLoading || commandInProgressRef.current}
                     rows={3}
                   />
                 </div>
@@ -2555,7 +2976,7 @@ function DNSConfiguration() {
                   className="form-control"
                   value={newRecordData.ttl}
                   onChange={(e) => setNewRecordData({...newRecordData, ttl: parseInt(e.target.value) || 3600})}
-                  disabled={actionLoading || actionInProgressRef.current}
+                  disabled={actionLoading || actionInProgressRef.current || machinesLoading || commandInProgressRef.current}
                 />
               </div>
               
@@ -2569,14 +2990,14 @@ function DNSConfiguration() {
                 <button 
                   className="btn-cancel"
                   onClick={() => setShowCreateRecordModal(false)}
-                  disabled={actionLoading || actionInProgressRef.current}
+                  disabled={actionLoading || actionInProgressRef.current || machinesLoading || commandInProgressRef.current}
                 >
                   Cancel
                 </button>
                 <button 
                   className="btn-create"
                   onClick={createRecord}
-                  disabled={actionLoading || actionInProgressRef.current || 
+                  disabled={actionLoading || actionInProgressRef.current || machinesLoading || commandInProgressRef.current || 
                     ((newRecordData.recordType === 'A' || newRecordData.recordType === 'CNAME') ? (!newRecordData.recordName || !newRecordData.recordValue) :
                      newRecordData.recordType === 'PTR' ? (!newRecordData.recordIp || !newRecordData.recordValue) :
                      (newRecordData.recordType === 'MX' || newRecordData.recordType === 'TXT') ? !newRecordData.recordValue : false)}

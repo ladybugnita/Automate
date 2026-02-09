@@ -1165,3 +1165,148 @@
     transform: rotate(360deg);
   }
 }
+/* Add these styles to your existing EventViewer.css */
+
+.select-machine-message {
+    background-color: #e8f4fd;
+    border: 1px solid #4299e1;
+    border-radius: 8px;
+    padding: 20px;
+    margin: 15px 0;
+    animation: fadeIn 0.3s ease-in;
+}
+
+.select-message-content {
+    display: flex;
+    align-items: flex-start;
+    gap: 15px;
+}
+
+.select-message-icon {
+    font-size: 24px;
+    flex-shrink: 0;
+}
+
+.select-message-text h3 {
+    margin: 0 0 8px 0;
+    color: #2d3748;
+    font-size: 16px;
+    font-weight: 600;
+}
+
+.select-message-text p {
+    margin: 5px 0;
+    color: #4a5568;
+    font-size: 14px;
+    line-height: 1.4;
+}
+
+.select-machine-prompt {
+    background-color: #f7fafc;
+    border: 2px dashed #cbd5e0;
+    border-radius: 8px;
+    padding: 40px 20px;
+    text-align: center;
+    margin: 20px 0;
+}
+
+.prompt-content {
+    max-width: 400px;
+    margin: 0 auto;
+}
+
+.prompt-icon {
+    font-size: 48px;
+    margin-bottom: 16px;
+    opacity: 0.7;
+}
+
+.prompt-text h3 {
+    margin: 0 0 12px 0;
+    color: #4a5568;
+    font-size: 18px;
+    font-weight: 600;
+}
+
+.prompt-text p {
+    margin: 8px 0;
+    color: #718096;
+    font-size: 14px;
+    line-height: 1.5;
+}
+
+.prompt-text p:last-child {
+    color: #4299e1;
+    font-weight: 500;
+    margin-top: 12px;
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(-10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* Update existing styles for better UX */
+.machine-select-container {
+    margin: 20px 0;
+}
+
+.no-machines-configured {
+    background-color: #fff5f5;
+    border: 1px solid #fc8181;
+    border-radius: 8px;
+    padding: 30px;
+    text-align: center;
+}
+
+.configure-machines-prompt p {
+    margin: 10px 0;
+    color: #4a5568;
+    font-size: 14px;
+}
+
+.btn-refresh-machines-large {
+    background-color: #4299e1;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    padding: 10px 20px;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    margin-top: 15px;
+    transition: background-color 0.2s;
+}
+
+.btn-refresh-machines-large:hover {
+    background-color: #3182ce;
+}
+
+.btn-refresh-machines-large:disabled {
+    background-color: #cbd5e0;
+    cursor: not-allowed;
+}
+
+/* Disable category tabs when no machine selected */
+.category-tabs button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.category-tabs button:disabled:hover {
+    background-color: transparent;
+}
+
+/* Update refresh button disabled state */
+.refresh-button:disabled,
+.refresh-single-btn:disabled,
+.action-button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}

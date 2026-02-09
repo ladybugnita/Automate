@@ -865,7 +865,7 @@ const WebSocketProvider = ({ children }) => {
         reconnectTimeoutRef.current = null;
       }
 
-      const wsUrl = `wss://nsj6fzcr-8081.inc1.devtunnels.ms/socket?token=${encodeURIComponent(token)}`;
+      const wsUrl = `ws://192.168.1.72:8081/socket?token=${encodeURIComponent(token)}`;
       console.log('Connecting to:', wsUrl);
 
       ws.current = new WebSocket(wsUrl);

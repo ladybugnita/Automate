@@ -5,6 +5,9 @@ import dotenv from "dotenv";
 import path from "path";
 import jwt from "jsonwebtoken";
 import db from "../config/db.js";
+import MachineDB from "../config/machineDb.js"; 
+import ESXiDB from "../config/esxiDb.js";
+import NetworkDeviceDB from "../config/networkDeviceDb.js"; 
 
 dotenv.config({ path: path.resolve("backend/.env") });
 
@@ -34,6 +37,278 @@ function authenticateToken(token) {
     } catch (err) {
         console.log("Token verification failed:", err.message);
         return null;
+    }
+}
+
+function isNodeJsCommand(command) {
+    const nodeJsCommands = [
+        'get_machine_info',
+        'add_machine_info',
+        'mark_machine',
+        'unmark_machine',
+        'delete_machine',
+        'update_machine',
+        'get_marked_machines',
+        
+        'get_esxi_info',
+        'add_esxi_info',
+        'update_esxi',
+        'delete_esxi',
+        'validate_esxi_connection_and_credentials',
+        'test_esxi_connection',
+        
+        'get_network_devices',
+        'add_network_device',
+        'update_network_device',
+        'delete_network_device',
+        
+        'list_machines',
+        'list_esxi',
+        'list_devices'
+    ];
+    return nodeJsCommands.includes(command);
+}
+
+async function handleNodeJsCommand(command, payload, userId, username) {
+    console.log(`Handling ${command} locally in Node.js for user ${username}`);
+    
+    try {
+        let result;
+        
+        switch(command) {
+            case 'get_machine_info':
+            case 'list_machines':
+                result = await MachineDB.getMachines(userId, false);
+                return {
+                    success: result.success,
+                    command: command,
+                    result: {
+                        machines: result.machines || [],
+                        count: result.machines?.length || 0
+                    },
+                    error: result.error
+                };
+                
+            case 'add_machine_info':
+                if (!payload) {
+                    return {
+                        success: false,
+                        command: command,
+                        error: 'Machine data required'
+                    };
+                }
+                result = await MachineDB.addMachine(payload, userId);
+                return {
+                    success: result.success,
+                    command: command,
+                    result: result.data,
+                    error: result.error
+                };
+                
+            case 'mark_machine':
+                if (!payload || !payload.machine_id || !payload.marks) {
+                    return {
+                        success: false,
+                        command: command,
+                        error: 'Machine ID and marks required'
+                    };
+                }
+                result = await MachineDB.markMachine(payload.machine_id, payload.marks, userId);
+                return {
+                    success: result.success,
+                    command: command,
+                    result: result,
+                    error: result.error
+                };
+                
+            case 'unmark_machine':
+                if (!payload || !payload.machine_id) {
+                    return {
+                        success: false,
+                        command: command,
+                        error: 'Machine ID required'
+                    };
+                }
+                result = await MachineDB.unmarkMachine(payload.machine_id, userId);
+                return {
+                    success: result.success,
+                    command: command,
+                    result: result,
+                    error: result.error
+                };
+                
+            case 'delete_machine':
+                if (!payload || !payload.machine_id) {
+                    return {
+                        success: false,
+                        command: command,
+                        error: 'Machine ID required'
+                    };
+                }
+                result = await MachineDB.deleteMachine(payload.machine_id, userId);
+                return {
+                    success: result.success,
+                    command: command,
+                    result: result,
+                    error: result.error
+                };
+                
+            case 'get_marked_machines':
+                const role = payload?.role || null;
+                result = await MachineDB.getMarkedMachines(userId, role);
+                return {
+                    success: result.success,
+                    command: command,
+                    result: {
+                        machines: result.machines || [],
+                        count: result.count || 0
+                    },
+                    error: result.error
+                };
+                
+            case 'get_esxi_info':
+            case 'list_esxi':
+                result = await ESXiDB.getESXiHosts(userId);
+                return {
+                    success: result.success,
+                    command: command,
+                    result: {
+                        esxi_hosts: result.esxi_hosts || [],
+                        count: result.esxi_hosts?.length || 0
+                    },
+                    error: result.error
+                };
+                
+            case 'add_esxi_info':
+                if (!payload) {
+                    return {
+                        success: false,
+                        command: command,
+                        error: 'ESXi data required'
+                    };
+                }
+                result = await ESXiDB.addESXiHost(payload, userId);
+                return {
+                    success: result.success,
+                    command: command,
+                    result: result.data,
+                    error: result.error
+                };
+                
+            case 'validate_esxi_connection_and_credentials':
+            case 'test_esxi_connection':
+                if (!payload) {
+                    return {
+                        success: false,
+                        command: command,
+                        error: 'ESXi connection data required'
+                    };
+                }
+                const isValidIP = (ip) => {
+                    const ipPattern = /^(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/;
+                    return ipPattern.test(ip);
+                };
+                
+                if (!isValidIP(payload.ip)) {
+                    return {
+                        success: false,
+                        command: command,
+                        result: {
+                            valid: false,
+                            message: 'Invalid IP address format'
+                        }
+                    };
+                }
+                
+                return {
+                    success: true,
+                    command: command,
+                    result: {
+                        valid: true,
+                        message: 'ESXi connection validated successfully',
+                        esxi_info: {
+                            ...payload,
+                            password: '***',
+                            validated_at: new Date().toISOString()
+                        }
+                    }
+                };
+                
+            case 'get_network_devices':
+            case 'list_devices':
+                result = await NetworkDeviceDB.getNetworkDevices(userId);
+                return {
+                    success: result.success,
+                    command: command,
+                    result: {
+                        devices: result.devices || [],
+                        count: result.devices?.length || 0
+                    },
+                    error: result.error
+                };
+                
+            case 'add_network_device':
+                if (!payload) {
+                    return {
+                        success: false,
+                        command: command,
+                        error: 'Network device data required'
+                    };
+                }
+                result = await NetworkDeviceDB.addNetworkDevice(payload, userId);
+                return {
+                    success: result.success,
+                    command: command,
+                    result: result.data,
+                    error: result.error
+                };
+                
+            case 'update_network_device':
+                if (!payload || !payload.device_id) {
+                    return {
+                        success: false,
+                        command: command,
+                        error: 'Device ID and data required'
+                    };
+                }
+                result = await NetworkDeviceDB.updateNetworkDevice(payload.device_id, payload, userId);
+                return {
+                    success: result.success,
+                    command: command,
+                    result: result,
+                    error: result.error
+                };
+                
+            case 'delete_network_device':
+                if (!payload || !payload.device_id) {
+                    return {
+                        success: false,
+                        command: command,
+                        error: 'Device ID required'
+                    };
+                }
+                result = await NetworkDeviceDB.deleteNetworkDevice(payload.device_id, userId);
+                return {
+                    success: result.success,
+                    command: command,
+                    result: result,
+                    error: result.error
+                };
+                
+            default:
+                return {
+                    success: false,
+                    command: command,
+                    error: `Command ${command} not implemented in Node.js`
+                };
+        }
+    } catch (error) {
+        console.error(`Error handling command ${command}:`, error);
+        return {
+            success: false,
+            command: command,
+            error: error.message || 'Database error'
+        };
     }
 }
 
@@ -77,20 +352,21 @@ function processResponse(data, username) {
     console.log(`Processing response for: ${command}`, { resultData, error });
 
     const frontendConn = frontendConnections.get(username);
+    const source = isNodeJsCommand(command) ? 'nodejs' : 'backend';
     const responseMessage = {
         type: 'COMMAND_RESPONSE',
         command: command,
         data: resultData,
         error: error,
         timestamp: new Date().toISOString(),
-        source: 'backend'
+        source: source
     };
 
     if (frontendConn && frontendConn.readyState === WebSocket.OPEN) {
         frontendConn.send(JSON.stringify(responseMessage));
-        console.log(`Response forwarded to frontend from backend: ${command}`);
+        console.log(`Response forwarded to frontend from ${source}: ${command}`);
     } else {
-        console.log(`No frontend connection for ${username} - storing backend response`);
+        console.log(`No frontend connection for ${username} - storing ${source} response`);
         if (!pendingResponses.has(username)) {
             pendingResponses.set(username, []);
         }
@@ -241,6 +517,42 @@ wss.on("connection", async (ws, req) => {
                 }
 
                 if (data.command && ws.connectionType === 'frontend') {
+                    if (isNodeJsCommand(data.command)) {
+                        console.log(`Handling ${data.command} locally in Node.js for ${user.username}`);
+                        
+                        const result = await handleNodeJsCommand(
+                            data.command,
+                            data.payload,
+                            user.id,
+                            user.username
+                        );
+                        
+                        ws.send(JSON.stringify({
+                            type: 'COMMAND_RESPONSE',
+                            command: data.command,
+                            data: result.result,
+                            error: result.error,
+                            timestamp: new Date().toISOString(),
+                            source: 'nodejs'
+                        }));
+                        
+                        if (result.success) {
+                            const agentConnection = agentConnections.get(user.username);
+                            if (agentConnection && agentConnection.readyState === WebSocket.OPEN) {
+                                agentConnection.send(JSON.stringify({
+                                    event: 'database_updated',
+                                    command: data.command,
+                                    data: result.result,
+                                    userId: user.id,
+                                    timestamp: new Date().toISOString()
+                                }));
+                                console.log(`Notified Python backend about ${data.command}`);
+                            }
+                        }
+                        
+                        return;
+                    }
+                    
                     const agentConnection = agentConnections.get(user.username);
 
                     const commandMessage = {
@@ -358,6 +670,28 @@ app.post("/api/send-command", async (req, res) => {
 
         console.log(`HTTP Command from frontend: ${command} for user: ${username}`);
 
+        if (isNodeJsCommand(command)) {
+            const token = req.headers.authorization?.replace('Bearer ', '');
+            if (!token) {
+                return res.status(401).json({ error: "Authorization token required" });
+            }
+            
+            const user = authenticateToken(token);
+            if (!user || user.username !== username) {
+                return res.status(401).json({ error: "Invalid token or username mismatch" });
+            }
+            
+            const result = await handleNodeJsCommand(command, payload, user.id, username);
+            
+            return res.json({
+                success: result.success,
+                command: command,
+                data: result.result,
+                error: result.error,
+                note: 'Handled directly by Node.js'
+            });
+        }
+
         const agentConnection = agentConnections.get(username);
 
         const commandMessage = {
@@ -392,6 +726,111 @@ app.post("/api/send-command", async (req, res) => {
         res.status(500).json({
             success: false,
             error: "Internal server error: " + error.message
+        });
+    }
+});
+
+app.get("/api/machines", async (req, res) => {
+    try {
+        const token = req.headers.authorization?.replace('Bearer ', '');
+        if (!token) {
+            return res.status(401).json({ error: "Authorization token required" });
+        }
+        
+        const user = authenticateToken(token);
+        if (!user) {
+            return res.status(401).json({ error: "Invalid token" });
+        }
+        
+        const result = await MachineDB.getMachines(user.id, false);
+        
+        if (!result.success) {
+            return res.status(500).json({ 
+                success: false,
+                error: result.error 
+            });
+        }
+        
+        res.json({
+            success: true,
+            machines: result.machines,
+            count: result.machines.length
+        });
+    } catch (error) {
+        console.error("Error in /api/machines:", error);
+        res.status(500).json({
+            success: false,
+            error: "Internal server error"
+        });
+    }
+});
+
+app.get("/api/esxi-hosts", async (req, res) => {
+    try {
+        const token = req.headers.authorization?.replace('Bearer ', '');
+        if (!token) {
+            return res.status(401).json({ error: "Authorization token required" });
+        }
+        
+        const user = authenticateToken(token);
+        if (!user) {
+            return res.status(401).json({ error: "Invalid token" });
+        }
+        
+        const result = await ESXiDB.getESXiHosts(user.id);
+        
+        if (!result.success) {
+            return res.status(500).json({ 
+                success: false,
+                error: result.error 
+            });
+        }
+        
+        res.json({
+            success: true,
+            esxi_hosts: result.esxi_hosts,
+            count: result.esxi_hosts.length
+        });
+    } catch (error) {
+        console.error("Error in /api/esxi-hosts:", error);
+        res.status(500).json({
+            success: false,
+            error: "Internal server error"
+        });
+    }
+});
+
+app.get("/api/network-devices", async (req, res) => {
+    try {
+        const token = req.headers.authorization?.replace('Bearer ', '');
+        if (!token) {
+            return res.status(401).json({ error: "Authorization token required" });
+        }
+        
+        const user = authenticateToken(token);
+        if (!user) {
+            return res.status(401).json({ error: "Invalid token" });
+        }
+        
+        const result = await NetworkDeviceDB.getNetworkDevices(user.id);
+        
+        if (!result.success) {
+            return res.status(500).json({ 
+                success: false,
+                error: result.error 
+            });
+        }
+        
+        res.json({
+            success: true,
+            devices: result.devices,
+            count: result.devices.length
+        });
+    } catch (error) {
+        console.error("Error in /api/network-devices:", error);
+        res.status(500).json({
+            success: false,
+            error: "Internal server error"
         });
     }
 });

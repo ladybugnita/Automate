@@ -117,6 +117,7 @@ const DHCP = () => {
   const [noDhcpConfigured, setNoDhcpConfigured] = useState(false);
   const [showNoDhcpModal, setShowNoDhcpModal] = useState(false);
   const [error, setError] = useState(null);
+  const [machinesLoading, setMachinesLoading] = useState(true);
   const [formData, setFormData] = useState({
     name: '',
     description: '',
@@ -133,13 +134,91 @@ const DHCP = () => {
   const listenerAdded = useRef(false);
   const installationStarted = useRef(false);
   const dhcpMachinesRef = useRef([]);
-  const initialCheckDoneRef = useRef(false);
   const dhcpMachineRef = useRef(null);
   const modalClosedRef = useRef(false);
+  const mountedRef = useRef(false);
+  const machineInfoListenerRef = useRef(false);
+  
+  // NEW: Command flow management refs
+  const commandInProgressRef = useRef(false);
+  const pendingCommandsRef = useRef([]);
+  const lastDHCPCheckTimeRef = useRef(0);
+  const lastDHCPInstallTimeRef = useRef(0);
+  const commandCooldownTime = 1000; // 1 second cooldown between same commands
 
-  useEffect(() => {
-    selectedScopeRef.current = selectedScope;
-  }, [selectedScope]);
+  // Get the API base URL dynamically
+  const API_BASE_URL = window.location.origin.includes('localhost') 
+    ? 'http://localhost:5000'
+    : `http://${window.location.hostname}:5000`;
+
+  // ============ COMMAND FLOW MANAGEMENT ============
+  
+  /**
+   * Send a command with deduplication and cooldown
+   * Prevents sending the same command multiple times in quick succession
+   */
+  const sendCommandWithFlow = useCallback((command, payload = null) => {
+    const now = Date.now();
+    
+    // Check if this command was sent recently
+    if (command === 'check_dhcp_role_installed_windows_ansible') {
+      const timeSinceLastCheck = now - lastDHCPCheckTimeRef.current;
+      if (timeSinceLastCheck < commandCooldownTime) {
+        console.log(`DHCP: Skipping duplicate ${command} command (cooldown: ${commandCooldownTime - timeSinceLastCheck}ms remaining)`);
+        return;
+      }
+      lastDHCPCheckTimeRef.current = now;
+    }
+    
+    if (command === 'install_dhcp_role_windows_ansible') {
+      const timeSinceLastInstall = now - lastDHCPInstallTimeRef.current;
+      if (timeSinceLastInstall < commandCooldownTime) {
+        console.log(`DHCP: Skipping duplicate ${command} command (cooldown: ${commandCooldownTime - timeSinceLastInstall}ms remaining)`);
+        return;
+      }
+      lastDHCPInstallTimeRef.current = now;
+    }
+    
+    // Check if a command is already in progress
+    if (commandInProgressRef.current) {
+      console.log(`DHCP: Command ${command} is already in progress, queueing...`);
+      pendingCommandsRef.current.push({ command, payload });
+      return;
+    }
+    
+    // Mark command as in progress
+    commandInProgressRef.current = true;
+    
+    console.log(`DHCP: SENDING COMMAND: ${command}`, payload ? 'with payload' : 'no payload');
+    
+    // Send the command
+    sendCommand(command, payload);
+    
+    // Set a timeout to clear the in-progress flag
+    setTimeout(() => {
+      commandInProgressRef.current = false;
+      
+      // Process any pending commands
+      if (pendingCommandsRef.current.length > 0) {
+        const nextCommand = pendingCommandsRef.current.shift();
+        console.log(`DHCP: Processing queued command: ${nextCommand.command}`);
+        sendCommandWithFlow(nextCommand.command, nextCommand.payload);
+      }
+    }, 500); // Small delay to prevent rapid-fire commands
+  }, [sendCommand]);
+
+  /**
+   * Process the next command in the queue
+   */
+  const processNextCommand = useCallback(() => {
+    if (pendingCommandsRef.current.length > 0 && !commandInProgressRef.current) {
+      const nextCommand = pendingCommandsRef.current.shift();
+      console.log(`DHCP: Processing queued command: ${nextCommand.command}`);
+      sendCommandWithFlow(nextCommand.command, nextCommand.payload);
+    }
+  }, [sendCommandWithFlow]);
+
+  // ============ UTILITY FUNCTIONS ============
 
   const getTotalScopesCount = () => {
     return Object.keys(scopes).length;
@@ -178,17 +257,13 @@ const DHCP = () => {
     }
   };
 
-  const handleRefreshMachines = () => {
-    console.log('DHCP: Refreshing machine list');
-    getDhcpMachinesFromDatabase();
-  };
-
   const extractResult = (responseData) => {
     if (!responseData) return null;
     
     if (typeof responseData === 'string') {
       try {
-        return JSON.parse(responseData);
+        const parsed = JSON.parse(responseData);
+        return parsed;
       } catch (e) {
         return responseData;
       }
@@ -197,66 +272,170 @@ const DHCP = () => {
     return responseData;
   };
 
-  const getDhcpMachinesFromDatabase = () => {
-    console.log('Fetching DHCP machines from database...');
-    sendCommand('get_machine_info', {});
-  };
-
-  const processDhcpMachines = (machines) => {
-    console.log('Processing DHCP machines:', machines);
-    
-    if (!machines || !Array.isArray(machines)) {
-      console.error(' Invalid machines data received:', machines);
-      setNoDhcpConfigured(true);
-      setShowNoDhcpModal(true);
-      return;
-    }
-
-    const dhcpMachinesList = machines.filter(machine => {
-      return machine.marked_as && Array.isArray(machine.marked_as) && 
-             machine.marked_as.some(mark => mark.role === 'dhcp');
-    });
-
-    console.log('DHCP machines found:', dhcpMachinesList);
-
-    if (dhcpMachinesList.length === 0) {
-      setNoDhcpConfigured(true);
-      setShowNoDhcpModal(true);
-      setDhcpInstalled(false); 
-      setCheckingStatus(false);
-      setLoading(false);
-      return;
-    }
-
-    setDhcpMachines(dhcpMachinesList);
-    dhcpMachinesRef.current = dhcpMachinesList;
-    setNoDhcpConfigured(false);
-    setShowNoDhcpModal(false);
-
-    if (dhcpMachinesList.length > 0) {
-      dhcpMachineRef.current = dhcpMachinesList[0];
-    }
-  };
+  // ============ MACHINE MANAGEMENT ============
 
   const getWindowsInfoForMachine = (machine) => {
     if (!machine) {
-      console.error(' No machine provided to getWindowsInfoForMachine');
+      console.error('DHCP: No machine provided to getWindowsInfoForMachine');
       return null;
     }
     
-    console.log(`Getting Windows info for machine: ${machine.name} (${machine.ip})`);
+    console.log(`DHCP: Getting Windows info for machine: ${machine.name || 'Unknown'} (${machine.ip})`);
     
-    if (!machine.password) {
-      console.error('No password found for machine:', machine.name);
+    // Check for password in different possible fields
+    const password = machine.password || machine.password_provided || '';
+    
+    console.log(`DHCP: Password for machine ${machine.name || machine.ip}:`, password ? '***HIDDEN***' : 'NOT FOUND');
+    
+    if (!password) {
+      console.error('DHCP: No password found for machine:', machine.name || machine.ip);
+      setError(`No password found for machine: ${machine.name || machine.ip}. Please check machine credentials in Machine Management.`);
       return null;
     }
     
     return {
       ip: machine.ip,
-      username: machine.username || 'admin',
-      password: machine.password
+      username: machine.username || machine.username_provided || 'admin',
+      password: password
     };
   };
+
+  const fetchMachineInfo = useCallback(async () => {
+    if (!mountedRef.current) {
+      console.log('DHCP: Component not mounted, skipping machine fetch');
+      return;
+    }
+    
+    console.log('DHCP: Fetching machines from Node.js REST API...');
+    setMachinesLoading(true);
+    setError(null);
+    
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) {
+        throw new Error('No authentication token found');
+      }
+      
+      console.log('DHCP: Trying to fetch machines WITH passwords...');
+      
+      const response = await fetch(`${API_BASE_URL}/api/machines/get-machines?include_password=true`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      
+      if (!response.ok) {
+        console.log('DHCP: Endpoint with password parameter failed, trying without parameter...');
+        
+        // Try without parameter
+        const response2 = await fetch(`${API_BASE_URL}/api/machines/get-machines`, {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          }
+        });
+        
+        if (!response2.ok) {
+          throw new Error(`Failed to fetch machines: ${response2.status} ${response2.statusText}`);
+        }
+        
+        const data = await response2.json();
+        console.log('DHCP: Received machines from /api/machines/get-machines:', data);
+        await processMachineData(data);
+        return;
+      }
+      
+      const data = await response.json();
+      console.log('DHCP: Received machines from /api/machines/get-machines?include_password=true:', data);
+      await processMachineData(data);
+      
+    } catch (err) {
+      console.error('DHCP: REST API failed:', err);
+      if (mountedRef.current) {
+        setError(`Failed to fetch machines: ${err.message}. Please check if machines are properly configured.`);
+        setMachinesLoading(false);
+      }
+      
+      // Fallback to WebSocket only if component is still mounted
+      if (mountedRef.current && isConnected) {
+        console.log('DHCP: Falling back to WebSocket for get_machine_info');
+        sendCommandWithFlow('get_machine_info', {});
+      }
+    }
+    
+    async function processMachineData(data) {
+      // Process the data - adjust based on your API response structure
+      let machines = [];
+      if (data.machines && Array.isArray(data.machines)) {
+        machines = data.machines;
+      } else if (data.data && Array.isArray(data.data)) {
+        machines = data.data;
+      } else if (Array.isArray(data)) {
+        machines = data;
+      }
+      
+      console.log('DHCP: Total machines found:', machines.length);
+      
+      // Filter for DHCP machines
+      const dhcpMachinesList = machines.filter(machine => {
+        const hasMarks = machine.marked_as && 
+                       Array.isArray(machine.marked_as) && 
+                       machine.marked_as.some(mark => mark.role === 'dhcp');
+        
+        if (hasMarks) {
+          console.log(`DHCP: Found DHCP machine: ${machine.name || 'Unknown'} (${machine.ip})`, {
+            id: machine.id,
+            hasPassword: !!(machine.password || machine.password_provided),
+            hasUsername: !!(machine.username || machine.username_provided),
+            marks: machine.marked_as
+          });
+        }
+        
+        return hasMarks;
+      });
+      
+      console.log(`DHCP: Found ${dhcpMachinesList.length} DHCP machines:`, dhcpMachinesList);
+      
+      if (dhcpMachinesList.length === 0) {
+        console.log('DHCP: No DHCP machines found');
+        setNoDhcpConfigured(true);
+        setShowNoDhcpModal(true);
+        setMachinesLoading(false);
+        setLoading(false);
+        setCheckingStatus(false);
+        return;
+      }
+      
+      // Check if passwords are available
+      const machinesWithPasswords = dhcpMachinesList.filter(machine => {
+        const hasPassword = machine.password || machine.password_provided;
+        if (!hasPassword) {
+          console.warn(`DHCP: Machine ${machine.name || 'Unknown'} (${machine.ip}) has no password`);
+        }
+        return hasPassword;
+      });
+      
+      if (machinesWithPasswords.length === 0) {
+        console.error('DHCP: No DHCP machines have passwords');
+        setError('DHCP machines found but no passwords available. Please check machine credentials in Machine Management.');
+        setNoDhcpConfigured(true);
+        setShowNoDhcpModal(true);
+      } else {
+        setNoDhcpConfigured(false);
+        setShowNoDhcpModal(false);
+      }
+      
+      setDhcpMachines(dhcpMachinesList);
+      dhcpMachinesRef.current = dhcpMachinesList;
+      setMachinesLoading(false);
+      
+      // Check DHCP status on these machines (using command flow)
+      checkDHCPOnMachine();
+    }
+  }, [API_BASE_URL, isConnected, sendCommandWithFlow]);
 
   const getMachineByType = () => {
     if (dhcpMachinesRef.current.length > 0) {
@@ -269,23 +448,25 @@ const DHCP = () => {
     const machine = getMachineByType();
     
     if (!machine) {
-      console.error('No DHCP machine found');
+      console.error('DHCP: No DHCP machine found');
       return null;
     }
     
     const windowsInfo = getWindowsInfoForMachine(machine);
     if (!windowsInfo) {
-      console.error('Failed to get Windows info for DHCP machine:', machine.name);
+      console.error('DHCP: Failed to get Windows info for DHCP machine:', machine.name);
       return null;
     }
     
-    console.log(`Creating payload for DHCP machine:`, machine.name);
+    console.log(`DHCP: Creating payload for DHCP machine:`, machine.name);
     
     return {
       windows_info: windowsInfo,
       ...additionalData
     };
   };
+
+  // ============ WEB SOCKET MESSAGE HANDLER ============
 
   const handleWebSocketMessage = useCallback((message) => {
     console.log('DHCP received WebSocket message:', message);
@@ -330,6 +511,9 @@ const DHCP = () => {
       setError(`Error: ${error}`);
       setLoading(false);
       setCheckingStatus(false);
+      setMachinesLoading(false);
+      commandInProgressRef.current = false;
+      processNextCommand();
       return;
     }
     
@@ -338,10 +522,33 @@ const DHCP = () => {
     
     switch(command) {
       case 'get_machine_info':
-        console.log('Received machine info');
-        if (responseData && responseData.machines) {
-          processDhcpMachines(responseData.machines);
+        console.log('DHCP: Received machine info via WebSocket fallback');
+        // Process machine info from WebSocket fallback
+        if (responseData && responseData.machines && Array.isArray(responseData.machines)) {
+          const dhcpMachinesList = responseData.machines.filter(machine => {
+            return machine.marked_as && Array.isArray(machine.marked_as) && 
+                   machine.marked_as.some(mark => mark.role === 'dhcp');
+          });
+          
+          console.log(`DHCP: Found ${dhcpMachinesList.length} DHCP machines via WebSocket:`, dhcpMachinesList);
+          
+          if (dhcpMachinesList.length === 0) {
+            setNoDhcpConfigured(true);
+            setShowNoDhcpModal(true);
+            setMachinesLoading(false);
+            setLoading(false);
+            setCheckingStatus(false);
+          } else {
+            setDhcpMachines(dhcpMachinesList);
+            dhcpMachinesRef.current = dhcpMachinesList;
+            setNoDhcpConfigured(false);
+            setShowNoDhcpModal(false);
+            setMachinesLoading(false);
+            checkDHCPOnMachine();
+          }
         }
+        commandInProgressRef.current = false;
+        processNextCommand();
         break;
         
       case 'check_dhcp_role_installed_windows_ansible':
@@ -376,6 +583,7 @@ const DHCP = () => {
         console.log(`DHCP installed status: ${isInstalled}`);
         setDhcpInstalled(isInstalled);
         setCheckingStatus(false);
+        setMachinesLoading(false);
         
         updateInstallationStatus('dhcp', 
           isInstalled ? INSTALLATION_STATUS.INSTALLED : INSTALLATION_STATUS.NOT_INSTALLED,
@@ -388,13 +596,16 @@ const DHCP = () => {
           setShowInstallModal(false);
           const payload = createPayload();
           if (payload) {
-            sendCommand('get_dhcp_details_windows_ansible', payload);
+            sendCommandWithFlow('get_dhcp_details_windows_ansible', payload);
             startAutoRefresh();
           }
         } else {
           console.log('DHCP not installed, showing install modal');
           setShowInstallModal(true);
         }
+        
+        commandInProgressRef.current = false;
+        processNextCommand();
         break;
         
       case 'get_dhcp_details_windows_ansible':
@@ -423,6 +634,8 @@ const DHCP = () => {
         
         console.log('Processed DHCP details:', dhcpDetails);
         processDHCPDetails(dhcpDetails);
+        commandInProgressRef.current = false;
+        processNextCommand();
         break;
         
       case 'install_dhcp_role_windows_ansible':
@@ -455,7 +668,7 @@ const DHCP = () => {
             console.log('Sending check command after installation...');
             const payload = createPayload();
             if (payload) {
-              sendCommand('check_dhcp_role_installed_windows_ansible', payload);
+              sendCommandWithFlow('check_dhcp_role_installed_windows_ansible', payload);
             }
           }, 2000);
         } else {
@@ -465,6 +678,9 @@ const DHCP = () => {
           setLoading(false);
           installationStarted.current = false;
         }
+        
+        commandInProgressRef.current = false;
+        processNextCommand();
         break;
         
       case 'configure_dhcp_scope_windows_ansible':
@@ -473,13 +689,17 @@ const DHCP = () => {
         let scopeConfigured = false;
         
         if (typeof responseData === 'string') {
+          console.log('String response from backend:', responseData);
           const resultLower = responseData.toLowerCase();
           scopeConfigured = resultLower.includes('dhcp scope configured');
-        } else if (typeof responseData === 'object') {
+        }
+
+        else if (typeof responseData === 'object' && responseData !== null) {
           const dataStr = JSON.stringify(responseData).toLowerCase();
           scopeConfigured = dataStr.includes('dhcp scope configured') ||
                            responseData.message === 'dhcp scope configured' ||
-                           responseData.result === 'dhcp scope configured';
+                           responseData.result === 'dhcp scope configured' ||
+                           responseData.success === true;
         }
         
         if (scopeConfigured) {
@@ -490,86 +710,87 @@ const DHCP = () => {
           setLoading(false);
           
           setTimeout(() => {
+            const successMessage = 'DHCP scope created successfully!';
+            console.log(successMessage);
+
+            alert(successMessage);
+            setTimeout(() => {
             const payload = createPayload();
             if (payload) {
-              sendCommand('get_dhcp_details_windows_ansible', payload);
+              sendCommandWithFlow('get_dhcp_details_windows_ansible', payload);
             }
           }, 1000);
+        }, 500);
         } else {
           console.log('DHCP scope configuration failed:', responseData);
-          setError(`Failed to create DHCP scope: ${JSON.stringify(responseData)}`);
+          let errorMessage = 'Failed to create DHCP scope';
+          if (typeof responseData === 'string') {
+            errorMessage = responseData;
+          } else if (typeof responseData === 'object'){
+            errorMessage = responseData.error || responseData.message || JSON.stringify(responseData);
+          }
+          setError(errorMessage);
           setLoading(false);
         }
+        
+        commandInProgressRef.current = false;
+        processNextCommand();
         break;
         
       default:
         console.log(`Unhandled command: ${command}`);
+        commandInProgressRef.current = false;
+        processNextCommand();
     }
     
-  }, [updateInstallationStatus, INSTALLATION_STATUS, sendCommand]);
+  }, [updateInstallationStatus, INSTALLATION_STATUS, sendCommandWithFlow, processNextCommand]);
+
+  // ============ USE EFFECTS ============
 
   useEffect(() => {
-    if (!listenerAdded.current) {
-      console.log('DHCP Component Mounted - Setting up WebSocket listener');
+    console.log('DHCP Component Mounted');
+    mountedRef.current = true;
+    
+    // Fetch machines immediately on mount
+    fetchMachineInfo();
+    
+    return () => {
+      console.log('DHCP Component Unmounting');
+      mountedRef.current = false;
+      stopAutoRefresh();
+      modalClosedRef.current = false;
+      commandInProgressRef.current = false;
+      pendingCommandsRef.current = [];
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!machineInfoListenerRef.current && mountedRef.current) {
+      console.log('DHCP: Setting up WebSocket listener');
       const removeListener = addListener(handleWebSocketMessage);
-      listenerAdded.current = true;
+      machineInfoListenerRef.current = true;
       
       return () => {
-        if (removeListener) removeListener();
-        listenerAdded.current = false;
-        stopAutoRefresh();
-        modalClosedRef.current = false;
+        if (removeListener) {
+          removeListener();
+        }
+        machineInfoListenerRef.current = false;
       };
     }
   }, [addListener, handleWebSocketMessage]);
 
   useEffect(() => {
-    console.log('DHCP useEffect running, initialCheckDone:', initialCheckDone.current);
-    
-    if (initialCheckDone.current) {
-      console.log('Initial check already done, skipping');
-      return;
-    }
-    
-    const performInitialCheck = () => {
-      console.log('Performing initial DHCP check...');
-      
-      setCheckingStatus(true);
-      setDhcpInstalled(null);
-      setShowInstallModal(false);
-      setError(null);
-      
-      if (installations.dhcp?.status === INSTALLATION_STATUS.INSTALLING) {
-        console.log('DHCP is installing globally, showing installation progress');
-        setDhcpInstalled(false);
-        setShowInstallModal(false); 
-        setCheckingStatus(false);
-        initialCheckDone.current = true;
-        return;
-      }
-      
-      if (isConnected) {
-        console.log('WebSocket is connected, fetching machine info...');
-        getDhcpMachinesFromDatabase();
-        initialCheckDone.current = true;
-      } else {
-        console.log('WebSocket not connected, retrying...');
-        setTimeout(() => {
-          performInitialCheck();
-        }, 1000);
-      }
-    };
-    
-    performInitialCheck();
-    
-  }, [isConnected, installations.dhcp, sendCommand, INSTALLATION_STATUS]);
+    selectedScopeRef.current = selectedScope;
+  }, [selectedScope]);
 
   useEffect(() => {
-    if (dhcpMachines.length > 0) {
-      console.log('DHCP machines loaded, checking DHCP status...');
+    if (dhcpMachines.length > 0 && !machinesLoading) {
+      console.log('DHCP: DHCP machines loaded, checking DHCP status...');
       checkDHCPOnMachine();
     }
-  }, [dhcpMachines]);
+  }, [dhcpMachines, machinesLoading]);
+
+  // ============ DHCP OPERATIONS ============
 
   const checkDHCPOnMachine = () => {
     const machine = getMachineByType();
@@ -578,6 +799,7 @@ const DHCP = () => {
       setError('No DHCP machine configured');
       setDhcpInstalled(false); 
       setCheckingStatus(false);
+      setMachinesLoading(false);
       return;
     }
     
@@ -588,11 +810,12 @@ const DHCP = () => {
       setError('Failed to create payload');
       setDhcpInstalled(false); 
       setCheckingStatus(false);
+      setMachinesLoading(false);
       return;
     }
     
     console.log('SENDING COMMAND: check_dhcp_role_installed_windows_ansible');
-    sendCommand('check_dhcp_role_installed_windows_ansible', payload);
+    sendCommandWithFlow('check_dhcp_role_installed_windows_ansible', payload);
   };
 
   const startAutoRefresh = () => {
@@ -606,7 +829,7 @@ const DHCP = () => {
         lastRefreshTimeRef.current = new Date();
         const payload = createPayload();
         if (payload) {
-          sendCommand('get_dhcp_details_windows_ansible', payload);
+          sendCommandWithFlow('get_dhcp_details_windows_ansible', payload);
         }
       }
     }, 30000);
@@ -635,7 +858,7 @@ const DHCP = () => {
     const payload = createPayload();
     if (payload) {
       console.log('SENDING COMMAND: get_dhcp_details_windows_ansible');
-      sendCommand('get_dhcp_details_windows_ansible', payload);
+      sendCommandWithFlow('get_dhcp_details_windows_ansible', payload);
     }
   };
 
@@ -808,7 +1031,7 @@ const DHCP = () => {
     setLoading(true);
     setError(null);
     
-    sendCommand('configure_dhcp_scope_windows_ansible', payload);
+    sendCommandWithFlow('configure_dhcp_scope_windows_ansible', payload);
   };
 
   const checkDHCPInstallation = () => {
@@ -821,7 +1044,7 @@ const DHCP = () => {
     const payload = createPayload();
     if (payload) {
       console.log('SENDING COMMAND: check_dhcp_role_installed_windows_ansible');
-      sendCommand('check_dhcp_role_installed_windows_ansible', payload);
+      sendCommandWithFlow('check_dhcp_role_installed_windows_ansible', payload);
     }
   };
 
@@ -845,14 +1068,13 @@ const DHCP = () => {
     
     updateInstallationStatus('dhcp', INSTALLATION_STATUS.INSTALLING, 0, 'Starting DHCP installation...');
     
-    sendCommand('install_dhcp_role_windows_ansible', payload);
+    sendCommandWithFlow('install_dhcp_role_windows_ansible', payload);
   };
 
   const checkDHCPAgain = () => {
     console.log('Checking DHCP status again...');
     setCheckingStatus(true);
     setError(null);
-    initialCheckDone.current = false;
     
     setTimeout(() => {
       checkDHCPInstallation();
@@ -907,6 +1129,8 @@ const DHCP = () => {
     return calculateAddressCount(formData.start_range, formData.end_range);
   };
 
+  // ============ RENDER FUNCTIONS ============
+
   const renderMachineInfo = () => {
     const machine = getMachineByType();
     if (!machine) {
@@ -927,6 +1151,15 @@ const DHCP = () => {
               Status: {dhcpInstalled === null ? 'Checking...' : dhcpInstalled === true ? 'Installed' : 'Not installed'}
             </span>
           </div>
+        </div>
+        <div className="machine-actions">
+          <button 
+            className="btn-refresh-machines-small"
+            onClick={fetchMachineInfo}
+            disabled={machinesLoading || commandInProgressRef.current}
+          >
+            {machinesLoading ? 'Refreshing...' : 'Refresh Machines'}
+          </button>
         </div>
       </div>
     );
@@ -978,9 +1211,10 @@ const DHCP = () => {
                 <div className="modal-stat-item">
                   <button 
                     className="modal-refresh-btn"
-                    onClick={handleRefreshMachines}
+                    onClick={fetchMachineInfo}
+                    disabled={machinesLoading || commandInProgressRef.current}
                   >
-                    Refresh Machines
+                    {machinesLoading ? 'Loading...' : 'Refresh Machines'}
                   </button>
                 </div>
               </div>
@@ -999,10 +1233,11 @@ const DHCP = () => {
                   className="modal-btn-secondary"
                   onClick={() => {
                     setShowNoDhcpModal(false);
-                    handleRefreshMachines();
+                    fetchMachineInfo();
                   }}
+                  disabled={machinesLoading || commandInProgressRef.current}
                 >
-                  Refresh Machine List
+                  {machinesLoading ? 'Loading...' : 'Refresh Machine List'}
                 </button>
                 <button 
                   className="modal-btn-tertiary"
@@ -1035,7 +1270,7 @@ const DHCP = () => {
             <button 
               className="btn-close-modal"
               onClick={handleCloseInstallModal}
-              disabled={installations.dhcp?.status === INSTALLATION_STATUS.INSTALLING || loading}
+              disabled={installations.dhcp?.status === INSTALLATION_STATUS.INSTALLING || loading || commandInProgressRef.current}
             >
               ×
             </button>
@@ -1067,6 +1302,8 @@ const DHCP = () => {
             <div className="connection-status-small">
               <span className={`status-indicator ${isConnected ? 'connected' : 'disconnected'}`}></span>
               WebSocket: {isConnected ? 'Connected' : 'Disconnected'}
+              {machinesLoading && <span className="machines-loading"> | Loading machines...</span>}
+              {commandInProgressRef.current && <span className="command-loading"> | Command in progress...</span>}
             </div>
             
           </div>
@@ -1074,7 +1311,7 @@ const DHCP = () => {
             <button 
               className="btn-primary" 
               onClick={installDHCP}
-              disabled={!isConnected || installations.dhcp?.status === INSTALLATION_STATUS.INSTALLING || checkingStatus || loading}
+              disabled={!isConnected || installations.dhcp?.status === INSTALLATION_STATUS.INSTALLING || checkingStatus || loading || machinesLoading || commandInProgressRef.current}
             >
               {installations.dhcp?.status === INSTALLATION_STATUS.INSTALLING || loading ? (
                 <>
@@ -1094,8 +1331,9 @@ const DHCP = () => {
 
   const shouldShowLoading = () => {
     if (modalClosedRef.current) return false;
-    if (checkingStatus) return true;
-    if (dhcpInstalled === null && !showNoDhcpModal && !showInstallModal) return true;
+    if (machinesLoading) return true;
+    if (checkingStatus && dhcpMachines.length > 0) return true;
+    if (dhcpInstalled === null && !showNoDhcpModal && !showInstallModal && dhcpMachines.length > 0) return true;
     return false;
   };
 
@@ -1103,8 +1341,13 @@ const DHCP = () => {
     return (
       <div className="dhcp-loading">
         <div className="spinner"></div>
-        <p>Checking DHCP Server Status...</p>
-        <p className="loading-subtext">Please wait while we check if DHCP is installed...</p>
+        <p>{machinesLoading ? 'Loading Machine Information...' : 'Checking DHCP Server Status...'}</p>
+        <p className="loading-subtext">
+          {machinesLoading ? 'Fetching machine data from API...' : 'Please wait while we check if DHCP is installed...'}
+        </p>
+        {commandInProgressRef.current && (
+          <p className="command-progress-text">Command in progress...</p>
+        )}
       </div>
     );
   }
@@ -1142,6 +1385,7 @@ const DHCP = () => {
             className="btn-secondary"
             onClick={checkDHCPAgain}
             style={{ marginTop: '20px' }}
+            disabled={commandInProgressRef.current}
           >
             <i className="fas fa-sync-alt"></i> Check Installation Status
           </button>
@@ -1158,23 +1402,23 @@ const DHCP = () => {
     return renderInstallModal();
   }
 
-  if (dhcpInstalled === null && !checkingStatus) {
+  if (dhcpInstalled === null && !checkingStatus && dhcpMachines.length > 0) {
     return (
       <div className="dhcp-empty-state">
         <div className="empty-icon">
           <i className="fas fa-dhcp fa-4x"></i>
         </div>
         <h2>DHCP Configuration</h2>
-        <p>No DHCP machine is configured. Please mark a machine as DHCP in Machine Management.</p>
+        <p>Unable to determine DHCP status. Please check the connection.</p>
         <button 
           className="btn-primary"
           onClick={() => {
             modalClosedRef.current = false;
             setCheckingStatus(true);
             setDhcpInstalled(null);
-            initialCheckDone.current = false;
-            getDhcpMachinesFromDatabase();
+            fetchMachineInfo();
           }}
+          disabled={machinesLoading || commandInProgressRef.current}
         >
           <i className="fas fa-sync-alt"></i> Check Again
         </button>
@@ -1334,7 +1578,7 @@ const DHCP = () => {
                   <button 
                     className="btn-success" 
                     onClick={createScope}
-                    disabled={loading}
+                    disabled={loading || machinesLoading || commandInProgressRef.current}
                   >
                     {loading ? (
                       <>
@@ -1389,6 +1633,7 @@ const DHCP = () => {
                     className="btn-primary btn-sm"
                     onClick={() => setShowCreateModal(true)}
                     style={{ marginTop: '10px', padding: '5px 10px', fontSize: '12px' }}
+                    disabled={machinesLoading || commandInProgressRef.current}
                   >
                     <i className="fas fa-plus"></i> Create Scope
                   </button>
@@ -1413,6 +1658,7 @@ const DHCP = () => {
             <button 
               className="add-scope-btn"
               onClick={() => setShowCreateModal(true)}
+              disabled={machinesLoading || commandInProgressRef.current}
             >
               <i className="fas fa-plus-circle"></i>
               Add Scope
@@ -1489,10 +1735,16 @@ const DHCP = () => {
                     Loading...
                   </span>
                 )}
-                {installations.dhcp?.status === INSTALLATION_STATUS.INSTALLING && (
+                {machinesLoading && (
                   <span style={{ marginLeft: '15px', color: '#ff9800' }}>
                     <i className="fas fa-spinner fa-spin" style={{ marginRight: '5px' }}></i>
-                    Installing DHCP...
+                    Loading machines...
+                  </span>
+                )}
+                {commandInProgressRef.current && (
+                  <span style={{ marginLeft: '15px', color: '#9c27b0' }}>
+                    <i className="fas fa-spinner fa-spin" style={{ marginRight: '5px' }}></i>
+                    Command in progress...
                   </span>
                 )}
               </div>
@@ -1501,7 +1753,7 @@ const DHCP = () => {
               <button 
                 className="btn-secondary"
                 onClick={loadScopes}
-                disabled={loading}
+                disabled={loading || !dhcpInstalled || machinesLoading || commandInProgressRef.current}
               >
                 <i className="fas fa-sync-alt"></i>
                 Refresh Now
@@ -1509,9 +1761,18 @@ const DHCP = () => {
               <button 
                 className="btn-primary"
                 onClick={() => setShowCreateModal(true)}
+                disabled={machinesLoading || commandInProgressRef.current}
               >
                 <i className="fas fa-plus"></i>
                 Add Scope
+              </button>
+              <button 
+                className="btn-refresh-machines-small"
+                onClick={fetchMachineInfo}
+                disabled={machinesLoading || commandInProgressRef.current}
+                style={{ marginLeft: '10px' }}
+              >
+                {machinesLoading ? 'Refreshing...' : 'Refresh Machines'}
               </button>
             </div>
           </div>
@@ -1527,6 +1788,7 @@ const DHCP = () => {
                 <button 
                   className="btn-primary"
                   onClick={() => setShowCreateModal(true)}
+                  disabled={machinesLoading || commandInProgressRef.current}
                 >
                   <i className="fas fa-plus"></i>
                   Create First Scope
@@ -1542,6 +1804,7 @@ const DHCP = () => {
                 <button 
                   className="btn-primary"
                   onClick={() => setShowCreateModal(true)}
+                  disabled={machinesLoading || commandInProgressRef.current}
                 >
                   <i className="fas fa-plus"></i>
                   Create New Scope
@@ -1564,16 +1827,29 @@ const DHCP = () => {
                           Loading data...
                         </span>
                       )}
+                      {machinesLoading && (
+                        <span style={{ marginLeft: '15px', color: '#ff9800' }}>
+                          <i className="fas fa-spinner fa-spin" style={{ marginRight: '5px' }}></i>
+                          Loading machines...
+                        </span>
+                      )}
+                      {commandInProgressRef.current && (
+                        <span style={{ marginLeft: '15px', color: '#9c27b0' }}>
+                          <i className="fas fa-spinner fa-spin" style={{ marginRight: '5px' }}></i>
+                          Command in progress...
+                        </span>
+                      )}
                     </div>
                   </div>
                   <div className="scope-actions">
-                    <button className="btn-secondary">
+                    <button className="btn-secondary" disabled={machinesLoading || commandInProgressRef.current}>
                       <i className="fas fa-edit"></i>
                       Edit
                     </button>
                     <button 
                       className="btn-danger" 
                       onClick={deleteScope}
+                      disabled={machinesLoading || commandInProgressRef.current}
                     >
                       <i className="fas fa-trash"></i>
                       Delete
@@ -1605,18 +1881,21 @@ const DHCP = () => {
                   <button 
                     className={`tab-btn ${activeTab === 'address-pool' ? 'active' : ''}`}
                     onClick={() => handleTabChange('address-pool')}
+                    disabled={machinesLoading || commandInProgressRef.current}
                   >
                     Address Pool
                   </button>
                   <button 
                     className={`tab-btn ${activeTab === 'address-leases' ? 'active' : ''}`}
                     onClick={() => handleTabChange('address-leases')}
+                    disabled={machinesLoading || commandInProgressRef.current}
                   >
                     Address Leases 
                   </button>
                   <button 
                     className={`tab-btn ${activeTab === 'scope-options' ? 'active' : ''}`}
                     onClick={() => handleTabChange('scope-options')}
+                    disabled={machinesLoading || commandInProgressRef.current}
                   >
                     Scope Options
                   </button>

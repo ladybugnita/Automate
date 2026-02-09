@@ -1,15 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import './MachineManagement.css';
-import { useWebSocket } from '../../context/WebSocketContext'; 
+import axios from 'axios';
+
+const API_BASE_URL = "http://192.168.1.72:5000/api";
 
 const MachineManagement = () => {
-  const { 
-    sendCommandAsync, 
-    isConnected, 
-    addListener, 
-    installations 
-  } = useWebSocket();
-  
   const [machineForm, setMachineForm] = useState({
     name: '',
     ip: '',
@@ -30,59 +25,136 @@ const MachineManagement = () => {
   const [isAddingMachine, setIsAddingMachine] = useState(false);
   const [isMarkingMachine, setIsMarkingMachine] = useState({});
   const [isUnmarkingMachine, setIsUnmarkingMachine] = useState({});
-  
-  const [responseListener, setResponseListener] = useState(null);
+  const [apiStatus, setApiStatus] = useState('idle'); 
+  const getAuthHeaders = () => {
+    const token = localStorage.getItem('token') || '';
+    return {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json'
+    };
+  };
+
+  const checkApiHealth = async () => {
+    try {
+      const token = localStorage.getItem('token') || '';
+      const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
+      
+      const response = await axios.get(`${API_BASE_URL}/health`, {
+        headers,
+        timeout: 5000
+      });
+      console.log('Health check response:', response.status);
+      return response.status === 200;
+    } catch (error) {
+      console.warn('API health check failed:', error.message);
+      return false;
+    }
+  };
 
   useEffect(() => {
-    const listener = (data) => {
-      console.log('MachineManagement received WebSocket response:', data);
+    const init = async () => {
+      const token = localStorage.getItem('token');
+      console.log('Initializing Machine Management with token:', token ? 'Present' : 'Missing');
       
-      if (data && data.action === 'response' && data.command) {
-        handleResponse(data);
+      if (token) {
+        try {
+          await loadMachines();
+          setApiStatus('success');
+        } catch (error) {
+          console.log('Initial load failed, checking health...');
+          const isHealthy = await checkApiHealth();
+          setApiStatus(isHealthy ? 'success' : 'error');
+        }
+      } else {
+        setApiStatus('error');
       }
     };
-
-    const removeListener = addListener(listener);
-    setResponseListener(() => removeListener);
-
-    return () => {
-      if (removeListener) removeListener();
-    };
-  }, [addListener]);
-
-  useEffect(() => {
-    if (isConnected) {
-      loadMachines();
-    }
-  }, [isConnected]);
+    init();
+  }, []);
 
   const loadMachines = async () => {
     setIsLoadingMachines(true);
     try {
-      console.log('Loading machines from backend...');
-      const response = await sendCommandAsync('get_machine_info');
+      console.log('Loading machines from Node.js REST API...');
       
-      console.log('Machine load response:', response);
+      const token = localStorage.getItem('token');
+      if (!token) {
+        throw new Error('No authentication token found. Please log in again.');
+      }
+      
+      const fullUrl = `${API_BASE_URL}/machines/get-machines`;
+      console.log('Calling URL:', fullUrl);
+      
+      const response = await axios.get(fullUrl, {
+        headers: getAuthHeaders(),
+        timeout: 10000
+      });
+      
+      console.log('Machine load response:', response.data);
       
       let machinesData = [];
-      if (response) {
-        if (response.result && response.result.machines) {
-          machinesData = response.result.machines;
-        } else if (Array.isArray(response.result)) {
-          machinesData = response.result;
-        } else if (Array.isArray(response)) {
-          machinesData = response;
-        }
+      if (response.data && response.data.success) {
+        machinesData = response.data.machines || response.data.data || [];
+      } else if (Array.isArray(response.data)) {
+        machinesData = response.data;
       }
       
       if (machinesData.length > 0) {
-        setMachines(machinesData);
-        updateAssignedRoles(machinesData);
+        const fixedMachines = machinesData.map(machine => {
+          if (machine.marked_as) {
+            try {
+              if (typeof machine.marked_as === 'string') {
+                return {
+                  ...machine,
+                  marked_as: JSON.parse(machine.marked_as)
+                };
+              }
+              return machine;
+            } catch (error) {
+              console.warn(`Error parsing marked_as for machine ${machine.id}:`, error);
+              return {
+                ...machine,
+                marked_as: [] 
+              };
+            }
+          }
+          return machine;
+        });
+        
+        setMachines(fixedMachines);
+        updateAssignedRoles(fixedMachines);
+        setApiStatus('success');
+        console.log(`Loaded ${fixedMachines.length} machines`);
       } else {
         console.log('No machines found or empty response');
+        setMachines([]);
+        setApiStatus('success'); 
       }
     } catch (error) {
       console.error('Error loading machines:', error);
+      console.error('Error details:', {
+        message: error.message,
+        response: error.response?.data,
+        status: error.response?.status,
+        url: error.config?.url
+      });
+      
+      setMachines([]);
+      setApiStatus('error');
+      
+      if (error.response?.status === 401) {
+        alert('Authentication failed. Please log in again.');
+      } else if (error.response?.status === 404) {
+        alert(`API endpoint not found (404). Please check if backend is running.\nTried: ${error.config?.url}`);
+      } else if (error.response?.data?.error) {
+        alert(`Error: ${error.response.data.error}`);
+      } else if (error.code === 'ECONNABORTED') {
+        alert('Connection timeout. Please check if the backend server is running.');
+      } else if (error.message === 'Network Error') {
+        alert('Network error. Please check if the backend server is running at ' + API_BASE_URL);
+      } else {
+        alert('Failed to load machines. Please check your connection.');
+      }
     } finally {
       setIsLoadingMachines(false);
     }
@@ -98,8 +170,10 @@ const MachineManagement = () => {
     };
 
     machines.forEach(machine => {
-      if (machine && machine.marked_as && Array.isArray(machine.marked_as)) {
-        machine.marked_as.forEach(mark => {
+      if (machine && machine.marked_as) {
+        const marks = Array.isArray(machine.marked_as) ? machine.marked_as : [];
+        
+        marks.forEach(mark => {
           if (mark && mark.role === 'dhcp') {
             if (mark.type === 'primary') newAssignedRoles.dhcp.primary = machine.id;
             if (mark.type === 'secondary') newAssignedRoles.dhcp.secondary = machine.id;
@@ -116,64 +190,6 @@ const MachineManagement = () => {
     });
 
     setAssignedRoles(newAssignedRoles);
-  };
-
-  const handleResponse = (response) => {
-    console.log('Handling WebSocket response in MachineManagement:', response);
-    
-    if (!response || !response.command) return;
-    
-    const { command, result } = response;
-    
-    console.log(`Response for command ${command}:`, result);
-    
-    switch (command) {
-      case 'get_machine_info':
-        if (result && result.machines) {
-          setMachines(result.machines);
-          updateAssignedRoles(result.machines);
-        }
-        break;
-      
-      case 'add_machine_info':
-        if (result) {
-          if (result.success) {
-            console.log('Machine added successfully via WebSocket:', result);
-            loadMachines(); 
-          } else {
-            console.error('Failed to add machine:', result.error);
-          }
-        }
-        setIsAddingMachine(false);
-        break;
-      
-      case 'mark_machine':
-        if (result && result.machine_id) {
-          setIsMarkingMachine(prev => ({ ...prev, [result.machine_id]: false }));
-          if (result.success) {
-            console.log('Machine marked successfully via WebSocket:', result);
-            loadMachines(); 
-          } else {
-            console.error('Failed to mark machine:', result.error);
-          }
-        }
-        break;
-      
-      case 'unmark_machine':
-        if (result && result.machine_id) {
-          setIsUnmarkingMachine(prev => ({ ...prev, [result.machine_id]: false }));
-          if (result.success) {
-            console.log('Machine unmarked successfully via WebSocket:', result);
-            loadMachines(); 
-          } else {
-            console.error('Failed to unmark machine:', result.error);
-          }
-        }
-        break;
-      
-      default:
-        console.log('Unhandled WebSocket response in MachineManagement:', response);
-    }
   };
 
   const handleInputChange = (e) => {
@@ -197,6 +213,11 @@ const MachineManagement = () => {
   const handleAddMachine = async (e) => {
     e.preventDefault();
     
+    if (apiStatus === 'error') {
+      alert('Cannot add machine. API connection failed. Please check backend server.');
+      return;
+    }
+    
     if (!machineForm.name || !machineForm.ip || !machineForm.username || !machineForm.password) {
       alert('Please fill in all required fields');
       return;
@@ -210,38 +231,60 @@ const MachineManagement = () => {
 
     try {
       setIsAddingMachine(true);
-      console.log('Sending add_machine_info command with:', machineForm);
+      console.log('Adding machine via Node.js API:', machineForm);
       
-      const response = await sendCommandAsync('add_machine_info', machineForm);
-      
-      console.log('Add machine response:', response);
-      
-      let result = response;
-      if (response && response.result) {
-        result = response.result;
+      const token = localStorage.getItem('token');
+      if (!token) {
+        throw new Error('No authentication token found. Please log in again.');
       }
       
-      if (result && result.success) {
+      const fullUrl = `${API_BASE_URL}/machines/add-machine`;
+      console.log('Calling URL:', fullUrl);
+      
+      const response = await axios.post(fullUrl, machineForm, {
+        headers: getAuthHeaders(),
+        timeout: 10000
+      });
+      
+      console.log('Add machine response:', response.data);
+      
+      if (response.data && response.data.success) {
         alert('Machine added successfully!');
         resetForm(); 
         loadMachines(); 
       } else {
-        const errorMessage = 
-          result?.error || 
-          result?.message || 
-          response?.error || 
-          'Unknown error occurred';
+        const errorMessage = response.data?.error || response.data?.message || 'Unknown error occurred';
         alert(`Error: ${errorMessage}`);
       }
     } catch (error) {
       console.error('Error adding machine:', error);
-      alert('Failed to add machine. Please check connection.');
+      console.error('Error details:', {
+        message: error.message,
+        response: error.response?.data,
+        status: error.response?.status,
+        url: error.config?.url
+      });
+      
+      if (error.response?.status === 404) {
+        alert(`API endpoint not found (404). Please check if backend is running.\nTried: ${error.config?.url}`);
+      } else if (error.response?.data?.error) {
+        alert(`Error: ${error.response.data.error}`);
+      } else if (error.code === 'ECONNABORTED') {
+        alert('Connection timeout. Please check if the backend server is running.');
+      } else {
+        alert('Failed to add machine. Please check connection.');
+      }
     } finally {
       setIsAddingMachine(false);
     }
   };
 
   const handleMarkMachine = async (machineId) => {
+    if (apiStatus === 'error') {
+      alert('Cannot mark machine. API connection failed.');
+      return;
+    }
+    
     const options = markingOptions[machineId] || {};
     
     const marks = [];
@@ -288,63 +331,101 @@ const MachineManagement = () => {
     try {
       setIsMarkingMachine(prev => ({ ...prev, [machineId]: true }));
       
-      const response = await sendCommandAsync('mark_machine', {
-        machine_id: machineId,
-        marks: marks
-      });
+      console.log('Marking machine via Node.js API:', { machineId, marks });
       
-      console.log('Mark machine response:', response);
+      const fullUrl = `${API_BASE_URL}/machines/mark-machine/${machineId}`;
+      console.log('Calling URL:', fullUrl);
       
-      let result = response;
-      if (response && response.result) {
-        result = response.result;
-      }
+      const response = await axios.post(fullUrl, 
+        { marks }, 
+        { 
+          headers: getAuthHeaders(),
+          timeout: 10000
+        }
+      );
       
-      if (result && result.success) {
+      console.log('Mark machine response:', response.data);
+      
+      if (response.data && response.data.success) {
         alert('Machine marked successfully!');
         setMarkingOptions(prev => ({ ...prev, [machineId]: {} }));
+        loadMachines(); 
       } else {
-        const errorMessage = 
-          result?.error || 
-          result?.message || 
-          response?.error || 
-          'Unknown error occurred';
+        const errorMessage = response.data?.error || response.data?.message || 'Unknown error occurred';
         alert(`Error: ${errorMessage}`);
       }
     } catch (error) {
       console.error('Error marking machine:', error);
-      alert('Failed to mark machine. Please check connection.');
+      console.error('Error details:', {
+        message: error.message,
+        response: error.response?.data,
+        status: error.response?.status,
+        url: error.config?.url
+      });
+      
+      if (error.response?.status === 404) {
+        alert(`API endpoint not found (404). Please check if backend is running.\nTried: ${error.config?.url}`);
+      } else if (error.response?.data?.error) {
+        alert(`Error: ${error.response.data.error}`);
+      } else if (error.code === 'ECONNABORTED') {
+        alert('Connection timeout. Please check if the backend server is running.');
+      } else {
+        alert('Failed to mark machine. Please check connection.');
+      }
     } finally {
       setIsMarkingMachine(prev => ({ ...prev, [machineId]: false }));
     }
   };
 
   const handleUnmarkMachine = async (machineId) => {
+    if (apiStatus === 'error') {
+      alert('Cannot unmark machine. API connection failed.');
+      return;
+    }
+    
     try {
       setIsUnmarkingMachine(prev => ({ ...prev, [machineId]: true }));
       
-      const response = await sendCommandAsync('unmark_machine', { machine_id: machineId });
+      console.log('Unmarking machine via Node.js API:', machineId);
       
-      console.log('Unmark machine response:', response);
+      const fullUrl = `${API_BASE_URL}/machines/unmark-machine/${machineId}`;
+      console.log('Calling URL:', fullUrl);
       
-      let result = response;
-      if (response && response.result) {
-        result = response.result;
-      }
+      const response = await axios.post(fullUrl, 
+        {}, 
+        { 
+          headers: getAuthHeaders(),
+          timeout: 10000
+        }
+      );
       
-      if (result && result.success) {
+      console.log('Unmark machine response:', response.data);
+      
+      if (response.data && response.data.success) {
         alert('Machine unmarked successfully!');
+        loadMachines(); 
       } else {
-        const errorMessage = 
-          result?.error || 
-          result?.message || 
-          response?.error || 
-          'Unknown error occurred';
+        const errorMessage = response.data?.error || response.data?.message || 'Unknown error occurred';
         alert(`Error: ${errorMessage}`);
       }
     } catch (error) {
       console.error('Error unmarking machine:', error);
-      alert('Failed to unmark machine. Please check connection.');
+      console.error('Error details:', {
+        message: error.message,
+        response: error.response?.data,
+        status: error.response?.status,
+        url: error.config?.url
+      });
+      
+      if (error.response?.status === 404) {
+        alert(`API endpoint not found (404). Please check if backend is running.\nTried: ${error.config?.url}`);
+      } else if (error.response?.data?.error) {
+        alert(`Error: ${error.response.data.error}`);
+      } else if (error.code === 'ECONNABORTED') {
+        alert('Connection timeout. Please check if the backend server is running.');
+      } else {
+        alert('Failed to unmark machine. Please check connection.');
+      }
     } finally {
       setIsUnmarkingMachine(prev => ({ ...prev, [machineId]: false }));
     }
@@ -393,7 +474,32 @@ const MachineManagement = () => {
   };
 
   const hasMarks = (machine) => {
-    return machine && Array.isArray(machine.marked_as) && machine.marked_as.length > 0;
+    if (!machine || !machine.marked_as) return false;
+    
+    try {
+      if (typeof machine.marked_as === 'string') {
+        const parsed = JSON.parse(machine.marked_as);
+        return Array.isArray(parsed) && parsed.length > 0;
+      }
+      return Array.isArray(machine.marked_as) && machine.marked_as.length > 0;
+    } catch (error) {
+      console.warn('Error checking marks for machine:', machine.id, error);
+      return false;
+    }
+  };
+
+  const getMachineMarks = (machine) => {
+    if (!machine || !machine.marked_as) return [];
+    
+    try {
+      if (typeof machine.marked_as === 'string') {
+        return JSON.parse(machine.marked_as);
+      }
+      return Array.isArray(machine.marked_as) ? machine.marked_as : [];
+    } catch (error) {
+      console.warn('Error getting marks for machine:', machine.id, error);
+      return [];
+    }
   };
 
   const formatDate = (dateString) => {
@@ -405,24 +511,47 @@ const MachineManagement = () => {
     }
   };
 
-  const checkBackendCapabilities = () => {
-    if (!isConnected) {
-      return 'Backend not connected';
-    }
-    
-    const hasMachineCommands = installations.dhcp.status !== 'not_installed' || 
-                               installations.dns.status !== 'not_installed';
-    
-    return hasMachineCommands ? 'Backend ready' : 'Backend may not have machine handlers';
-  };
-
   const isMachineProcessing = (machineId) => {
     return isMarkingMachine[machineId] || isUnmarkingMachine[machineId];
   };
 
+  const isApiAvailable = apiStatus === 'success';
+  
+  const isAuthenticated = !!localStorage.getItem('token');
+
+  const calculateMarkedMachines = () => {
+    const marked = machines.filter(m => hasMarks(m)).length;
+    return marked;
+  };
+
+  const markedMachinesBadge = calculateMarkedMachines();
+
   return (
     <div className="machine-management">
-      <h1>Machine Management</h1>
+      <div className="page-header">
+        <h1>Machine Management</h1>
+        <div className="header-badges">
+          {markedMachinesBadge > 0 && (
+            <span className="marked-badge">
+               {markedMachinesBadge} Machine{markedMachinesBadge !== 1 ? 's' : ''} Marked
+            </span>
+          )}
+          {markedMachinesBadge === 0 && machines.length > 0 && (
+            <span className="unmarked-badge">
+              No Machines Marked
+            </span>
+          )}
+          <span className="total-badge">
+            Total: {machines.length}
+          </span>
+        </div>
+      </div>
+      
+      {!isAuthenticated && (
+        <div className="auth-warning">
+          <p>Please log in to manage machines.</p>
+        </div>
+      )}
 
       <div className="add-machine-section">
         <h2>Add New Machine</h2>
@@ -437,7 +566,7 @@ const MachineManagement = () => {
               onChange={handleInputChange}
               placeholder="e.g., Server-01"
               required
-              disabled={isAddingMachine || !isConnected}
+              disabled={isAddingMachine || !isApiAvailable || !isAuthenticated}
             />
           </div>
 
@@ -451,7 +580,7 @@ const MachineManagement = () => {
               onChange={handleInputChange}
               placeholder="e.g., 192.168.1.100"
               required
-              disabled={isAddingMachine || !isConnected}
+              disabled={isAddingMachine || !isApiAvailable || !isAuthenticated}
             />
           </div>
 
@@ -465,7 +594,7 @@ const MachineManagement = () => {
               onChange={handleInputChange}
               placeholder="e.g., administrator"
               required
-              disabled={isAddingMachine || !isConnected}
+              disabled={isAddingMachine || !isApiAvailable || !isAuthenticated}
             />
           </div>
 
@@ -479,7 +608,7 @@ const MachineManagement = () => {
               onChange={handleInputChange}
               placeholder="Enter password"
               required
-              disabled={isAddingMachine || !isConnected}
+              disabled={isAddingMachine || !isApiAvailable || !isAuthenticated}
             />
           </div>
 
@@ -492,17 +621,21 @@ const MachineManagement = () => {
               value={machineForm.user}
               onChange={handleInputChange}
               placeholder="Your name"
-              disabled={isAddingMachine || !isConnected}
+              disabled={isAddingMachine || !isApiAvailable || !isAuthenticated}
             />
           </div>
 
           <button 
             type="submit" 
             className="add-button" 
-            disabled={!isConnected || isAddingMachine}
+            disabled={!isApiAvailable || isAddingMachine || !isAuthenticated}
           >
             {isAddingMachine ? 'Adding...' : 'Add Machine'}
           </button>
+          
+          {!isAuthenticated && (
+            <p className="info-note">Please log in to add machines</p>
+          )}
         </form>
       </div>
 
@@ -529,14 +662,25 @@ const MachineManagement = () => {
       <div className="available-machines">
         <div className="section-header">
           <h2>Available Machines ({machines.length})</h2>
-          <button onClick={loadMachines} className="refresh-button-small" disabled={!isConnected || isLoadingMachines}>
-            {isLoadingMachines ? 'Loading...' : '↻ Refresh'}
-          </button>
+          <div className="header-actions">
+            <button onClick={loadMachines} className="refresh-button-small" disabled={!isApiAvailable || isLoadingMachines || !isAuthenticated}>
+              {isLoadingMachines ? 'Loading...' : '↻ Refresh'}
+            </button>
+            {markedMachinesBadge > 0 && (
+              <span className="marked-count-badge">
+                {markedMachinesBadge} Marked
+              </span>
+            )}
+          </div>
         </div>
         
-        {isLoadingMachines && machines.length === 0 ? (
+        {!isAuthenticated ? (
+          <div className="auth-required">
+            <p>Please log in to view machines.</p>
+          </div>
+        ) : isLoadingMachines && machines.length === 0 ? (
           <div className="loading-machines">
-            <p>Loading machines from backend...</p>
+            <p>Loading machines from Node.js API...</p>
             <div className="loader"></div>
           </div>
         ) : machines.length === 0 ? (
@@ -548,14 +692,38 @@ const MachineManagement = () => {
             {machines.map(machine => {
               const isProcessing = isMachineProcessing(machine.id);
               const isMarked = hasMarks(machine);
+              const machineMarks = getMachineMarks(machine);
               
               return (
                 <div key={machine.id} className="machine-card">
                   <div className="machine-header">
-                    <h3>{machine.name}</h3>
-                    <span className={`status ${isMarked ? 'marked' : 'available'}`}>
-                      {isMarked ? 'Marked' : 'Available'}
-                    </span>
+                    <div className="machine-title">
+                      <h3>{machine.name}</h3>
+                      <div className="machine-status-badges">
+                        {isMarked ? (
+                          <span className="status marked">
+                            Marked ({machineMarks.length} role{machineMarks.length !== 1 ? 's' : ''})
+                          </span>
+                        ) : (
+                          <span className="status available">
+                            Available
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    {isMarked && (
+                      <div className="machine-roles-badges">
+                        {machineMarks.map((mark, index) => (
+                          <span 
+                            key={index} 
+                            className={`role-badge ${mark.role}`}
+                            title={`${mark.role?.toUpperCase() || 'Unknown'} - ${mark.type || 'unknown'}`}
+                          >
+                            {mark.role?.toUpperCase() || 'Unknown'} {mark.type || ''}
+                          </span>
+                        ))}
+                      </div>
+                    )}
                   </div>
                   
                   <div className="machine-info">
@@ -569,9 +737,10 @@ const MachineManagement = () => {
                       <div className="current-marks">
                         <strong>Currently Marked As:</strong>
                         <ul>
-                          {machine.marked_as.map((mark, index) => (
-                            <li key={index}>
-                              {mark.role?.toUpperCase() || 'Unknown'} ({mark.type || 'unknown'})
+                          {machineMarks.map((mark, index) => (
+                            <li key={index} className={`mark-${mark.role}`}>
+                              <span className="mark-role">{mark.role?.toUpperCase() || 'Unknown'}</span>
+                              <span className="mark-type">({mark.type || 'unknown'})</span>
                             </li>
                           ))}
                         </ul>
@@ -580,7 +749,7 @@ const MachineManagement = () => {
                   </div>
 
                   <div className="marking-section">
-                    <h4>Mark As:</h4>
+                    <h4>{isMarked ? 'Change Marks' : 'Mark As:'}</h4>
                     
                     <div className="marking-options">
                       <div className="marking-option">
@@ -589,7 +758,7 @@ const MachineManagement = () => {
                             type="checkbox"
                             checked={!!markingOptions[machine.id]?.dhcp}
                             onChange={(e) => handleMarkingChange(machine.id, 'dhcp', e.target.checked)}
-                            disabled={isMarked && machine.marked_as.some(m => m.role === 'dhcp') || isProcessing || !isConnected}
+                            disabled={isMarked && machineMarks.some(m => m.role === 'dhcp') || isProcessing || !isApiAvailable || !isAuthenticated}
                           />
                           <span>DHCP</span>
                         </label>
@@ -602,7 +771,7 @@ const MachineManagement = () => {
                                 value="primary"
                                 checked={markingOptions[machine.id]?.dhcpType === 'primary'}
                                 onChange={() => handleMarkingTypeChange(machine.id, 'dhcp', 'primary')}
-                                disabled={!isRoleAvailable('dhcp', 'primary') || isProcessing || !isConnected}
+                                disabled={!isRoleAvailable('dhcp', 'primary') || isProcessing || !isApiAvailable || !isAuthenticated}
                               />
                               Primary
                             </label>
@@ -613,7 +782,7 @@ const MachineManagement = () => {
                                 value="secondary"
                                 checked={markingOptions[machine.id]?.dhcpType === 'secondary'}
                                 onChange={() => handleMarkingTypeChange(machine.id, 'dhcp', 'secondary')}
-                                disabled={!isRoleAvailable('dhcp', 'secondary') || isProcessing || !isConnected}
+                                disabled={!isRoleAvailable('dhcp', 'secondary') || isProcessing || !isApiAvailable || !isAuthenticated}
                               />
                               Secondary
                             </label>
@@ -627,7 +796,7 @@ const MachineManagement = () => {
                             type="checkbox"
                             checked={!!markingOptions[machine.id]?.dns}
                             onChange={(e) => handleMarkingChange(machine.id, 'dns', e.target.checked)}
-                            disabled={isMarked && machine.marked_as.some(m => m.role === 'dns') || isProcessing || !isConnected}
+                            disabled={isMarked && machineMarks.some(m => m.role === 'dns') || isProcessing || !isApiAvailable || !isAuthenticated}
                           />
                           <span>DNS</span>
                         </label>
@@ -640,7 +809,7 @@ const MachineManagement = () => {
                                 value="primary"
                                 checked={markingOptions[machine.id]?.dnsType === 'primary'}
                                 onChange={() => handleMarkingTypeChange(machine.id, 'dns', 'primary')}
-                                disabled={!isRoleAvailable('dns', 'primary') || isProcessing || !isConnected}
+                                disabled={!isRoleAvailable('dns', 'primary') || isProcessing || !isApiAvailable || !isAuthenticated}
                               />
                               Primary
                             </label>
@@ -651,7 +820,7 @@ const MachineManagement = () => {
                                 value="secondary"
                                 checked={markingOptions[machine.id]?.dnsType === 'secondary'}
                                 onChange={() => handleMarkingTypeChange(machine.id, 'dns', 'secondary')}
-                                disabled={!isRoleAvailable('dns', 'secondary') || isProcessing || !isConnected}
+                                disabled={!isRoleAvailable('dns', 'secondary') || isProcessing || !isApiAvailable || !isAuthenticated}
                               />
                               Secondary
                             </label>
@@ -665,7 +834,7 @@ const MachineManagement = () => {
                             type="checkbox"
                             checked={!!markingOptions[machine.id]?.ad}
                             onChange={(e) => handleMarkingChange(machine.id, 'ad', e.target.checked)}
-                            disabled={isMarked && machine.marked_as.some(m => m.role === 'ad') || isProcessing || !isConnected}
+                            disabled={isMarked && machineMarks.some(m => m.role === 'ad') || isProcessing || !isApiAvailable || !isAuthenticated}
                           />
                           <span>Active Directory</span>
                         </label>
@@ -682,7 +851,7 @@ const MachineManagement = () => {
                         <button
                           onClick={() => handleUnmarkMachine(machine.id)}
                           className="unmark-button"
-                          disabled={isProcessing || !isConnected}
+                          disabled={isProcessing || !isApiAvailable || !isAuthenticated}
                         >
                           {isUnmarkingMachine[machine.id] ? 'Processing...' : 'Unmark All'}
                         </button>
@@ -695,7 +864,8 @@ const MachineManagement = () => {
                              !markingOptions[machine.id]?.dns &&
                              !markingOptions[machine.id]?.ad) ||
                             isProcessing ||
-                            !isConnected
+                            !isApiAvailable ||
+                            !isAuthenticated
                           }
                         >
                           {isMarkingMachine[machine.id] ? 'Processing...' : 'Mark Machine'}

@@ -5,6 +5,7 @@ import dotenv from "dotenv";
 import path from "path";
 import { fileURLToPath } from "url";
 import jwt from "jsonwebtoken";
+import bodyParser from "body-parser";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -22,6 +23,7 @@ const JWT_SECRET = process.env.JWT_SECRET || "secretkey123";
 
 app.use(cors());
 app.use(express.json());
+app.use(bodyParser.json());
 
 app.use((req, res, next) => {
     console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
@@ -43,6 +45,42 @@ try {
     });
     authRoutes.post("/signup", (req, res) => {
         res.status(500).json({ error: "Auth module failed to load" });
+    });
+}
+
+console.log("Importing machineRoutes...");
+let machineRoutes;
+try {
+    const machineModule = await import("./routes/machineRoutes.js");
+    machineRoutes = machineModule.default;
+    console.log("✓ machineRoutes imported successfully");
+} catch (error) {
+    console.error("Error importing machineRoutes:", error);
+    console.error("Error stack:", error.stack);
+    machineRoutes = express.Router();
+    machineRoutes.post("/add-machine", (req, res) => {
+        res.status(500).json({ 
+            success: false,
+            error: "Machine module failed to load: " + error.message 
+        });
+    });
+}
+
+console.log("Importing networkDeviceRoutes...");
+let networkDeviceRoutes;
+try {
+    const networkDeviceModule = await import("./routes/networkDeviceRoutes.js");
+    networkDeviceRoutes = networkDeviceModule.default;
+    console.log("✓ networkDeviceRoutes imported successfully");
+} catch (error) {
+    console.error("Error importing networkDeviceRoutes:", error);
+    console.error("Error stack:", error.stack);
+    networkDeviceRoutes = express.Router();
+    networkDeviceRoutes.post("/add-network-device", (req, res) => {
+        res.status(500).json({ 
+            success: false,
+            error: "Network device module failed to load: " + error.message 
+        });
     });
 }
 
@@ -104,7 +142,9 @@ try {
 }
 
 app.use("/api", authRoutes);
-app.use("/api/esxi", esxiRoutes); 
+app.use("/api/machines", machineRoutes);
+app.use("/api/network-devices", networkDeviceRoutes);
+app.use("/api/esxi", esxiRoutes);
 
 const persistentConnections = new Map();
 
@@ -435,7 +475,16 @@ app.get("/health", (req, res) => {
         timestamp: new Date().toISOString(),
         environment: process.env.NODE_ENV || "development",
         server_port: server_port,
-        socket_port: socket_port
+        socket_port: socket_port,
+        routes: {
+            auth: "/api/login, /api/signup",
+            machines: "/api/machines/*",
+            network_devices: "/api/network-devices/*",
+            esxi: "/api/esxi/*",
+            validation: "/api/validate-token",
+            agent: "/check-agent-status, /api/agent-status",
+            system: "/health, /api/test-esxi-routes"
+        }
     });
 });
 
@@ -486,6 +535,65 @@ app.get("/api/test-esxi-routes", async (req, res) => {
     }
 });
 
+app.get("/api/test-machine-routes", async (req, res) => {
+    try {
+        const token = req.query.token;
+        
+        if (!token) {
+            return res.json({
+                success: false,
+                message: "Token required for testing"
+            });
+        }
+        
+        const decoded = jwt.verify(token, JWT_SECRET);
+        
+        const [users] = await db.query("SELECT COUNT(*) as count FROM users WHERE id = ?", [decoded.id]);
+        const [machines] = await db.query("SELECT COUNT(*) as count FROM machine_info WHERE user_id = ?", [decoded.id]);
+        const [networkDevices] = await db.query("SELECT COUNT(*) as count FROM network_devices WHERE user_id = ?", [decoded.id]);
+        
+        res.json({
+            success: true,
+            message: "Machine and network device routes test successful",
+            user: {
+                id: decoded.id,
+                username: decoded.username
+            },
+            database: {
+                users: users[0].count,
+                machines: machines[0].count,
+                network_devices: networkDevices[0].count
+            },
+            endpoints: {
+                add_machine: "POST /api/machines/add-machine",
+                get_machines: "GET /api/machines/get-machines",
+                get_machine: "GET /api/machines/get-machine/:id",
+                update_machine: "PUT /api/machines/update-machine/:id",
+                delete_machine: "DELETE /api/machines/delete-machine/:id",
+                mark_machine: "POST /api/machines/mark-machine/:id",
+                unmark_machine: "POST /api/machines/unmark-machine/:id",
+                get_marked_machines: "GET /api/machines/get-marked-machines",
+                
+                add_network_device: "POST /api/network-devices/add-network-device",
+                get_network_devices: "GET /api/network-devices/get-network-devices",
+                get_network_device: "GET /api/network-devices/get-network-device/:id",
+                update_network_device: "PUT /api/network-devices/update-network-device/:id",
+                delete_network_device: "DELETE /api/network-devices/delete-network-device/:id",
+                get_devices_by_type: "GET /api/network-devices/get-devices-by-type",
+                get_devices_by_status: "GET /api/network-devices/get-devices-by-status"
+            }
+        });
+        
+    } catch (error) {
+        console.error("Error testing machine routes:", error);
+        res.status(500).json({
+            success: false,
+            message: "Test failed",
+            error: error.message
+        });
+    }
+});
+
 app.use((err, req, res, next) => {
     console.error('Server Error:', err.stack);
     res.status(500).json({
@@ -506,12 +614,4 @@ app.use((req, res) => {
 app.listen(server_port, '0.0.0.0', () => {
     console.log(`Backend server running on http://${my_ip}:${server_port}`);
     console.log(`WebSocket server expected at: ws://${my_ip}:${socket_port}/socket`);
-    console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
-    console.log(`Available endpoints:`);
-    console.log(`  POST   /api/esxi/save-esxi-host`);
-    console.log(`  GET    /api/esxi/get-esxi-hosts`);
-    console.log(`  GET    /api/esxi/get-esxi-connections`);
-    console.log(`  POST   /api/validate-esxi-connection`);
-    console.log(`  GET    /check-agent-status`);
-    console.log(`  GET    /health`);
-});
+   });
