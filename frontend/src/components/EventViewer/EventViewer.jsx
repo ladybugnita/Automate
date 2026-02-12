@@ -43,16 +43,16 @@ const EventViewer = () => {
         application: [],
         security: []
     });
-    const [loading, setLoading] = useState(false); // Changed to false initially
+    const [loading, setLoading] = useState(false);
     const [selectedCategory, setSelectedCategory] = useState('system');
     const [autoRefresh, setAutoRefresh] = useState(false);
     const [lastUpdated, setLastUpdated] = useState(null);
     const [markedMachines, setMarkedMachines] = useState([]);
     const [machinesLoading, setMachinesLoading] = useState(true);
     const [showMarkModal, setShowMarkModal] = useState(false);
-    const [selectedMachine, setSelectedMachine] = useState(''); // Empty by default
+    const [selectedMachine, setSelectedMachine] = useState('');
     const [error, setError] = useState(null);
-    const [showSelectMessage, setShowSelectMessage] = useState(true); // New state for showing select message
+    const [showSelectMessage, setShowSelectMessage] = useState(true);
     
     const isFetchingRef = useRef(false);
     const timeoutRef = useRef(null);
@@ -66,7 +66,6 @@ const EventViewer = () => {
         'Active Directory', 'Routing'
     ];
 
-    // Get the API base URL dynamically - memoized to prevent recreation
     const API_BASE_URL = useMemo(() => {
         if (typeof window !== 'undefined') {
             const currentHost = window.location.hostname;
@@ -95,15 +94,14 @@ const EventViewer = () => {
         return responseData;
     };
 
-    const getWindowsInfoForMachine = useCallback((machine) => {
+    const getServerInfoForMachine = useCallback((machine) => {
         if (!machine) {
-            console.error('Event Viewer: No machine provided to getWindowsInfoForMachine');
+            console.error('Event Viewer: No machine provided to getServerInfoForMachine');
             return null;
         }
         
-        console.log(`Event Viewer: Getting Windows info for machine: ${machine.name || 'Unknown'} (${machine.ip})`);
+        console.log(`Event Viewer: Getting server info for machine: ${machine.name || 'Unknown'} (${machine.ip})`);
         
-        // Check for password in different possible fields
         const password = machine.password || machine.password_provided || '';
         
         console.log(`Event Viewer: Password for machine ${machine.name || machine.ip}:`, password ? '***HIDDEN***' : 'NOT FOUND');
@@ -119,7 +117,9 @@ const EventViewer = () => {
         return {
             ip: machine.ip,
             username: machine.username || machine.username_provided || 'admin',
-            password: password
+            password: password,
+            os_type: machine.os_type || '',
+            sub_os_type: machine.sub_os_type || ''
         };
     }, []);
 
@@ -130,17 +130,17 @@ const EventViewer = () => {
             return null;
         }
         
-        const windowsInfo = getWindowsInfoForMachine(machine);
-        if (!windowsInfo) {
+        const serverInfo = getServerInfoForMachine(machine);
+        if (!serverInfo) {
             return null;
         }
         
         console.log(`Event Viewer: Creating payload for single machine: ${machine.name || 'Unknown'} (${machine.ip})`);
         
         return {
-            windows_info: windowsInfo
+            server_info: serverInfo
         };
-    }, [getWindowsInfoForMachine]);
+    }, [getServerInfoForMachine]);
 
     const createEventViewerPayloadForAllMachines = useCallback((machines) => {
         if (!machines || machines.length === 0) {
@@ -149,29 +149,29 @@ const EventViewer = () => {
             return null;
         }
         
-        const windowsInfos = [];
+        const serverInfos = [];
         
         machines.forEach(machine => {
-            const windowsInfo = getWindowsInfoForMachine(machine);
-            if (windowsInfo) {
-                windowsInfos.push(windowsInfo);
+            const serverInfo = getServerInfoForMachine(machine);
+            if (serverInfo) {
+                serverInfos.push(serverInfo);
             } else {
-                console.error(`Event Viewer: Failed to get Windows info for machine: ${machine.name || 'Unknown'} (${machine.ip})`);
+                console.error(`Event Viewer: Failed to get server info for machine: ${machine.name || 'Unknown'} (${machine.ip})`);
             }
         });
         
-        if (windowsInfos.length === 0) {
-            console.error('Event Viewer: Failed to get Windows info for any marked machine');
+        if (serverInfos.length === 0) {
+            console.error('Event Viewer: Failed to get server info for any marked machine');
             setError('Failed to get credentials for marked machines. Please check that all marked machines have valid credentials in Machine Management.');
             return null;
         }
         
-        console.log(`Event Viewer: Creating payload for ${windowsInfos.length} machine(s)`);
+        console.log(`Event Viewer: Creating payload for ${serverInfos.length} machine(s)`);
         
         return {
-            windows_infos: windowsInfos
+            server_infos: serverInfos
         };
-    }, [getWindowsInfoForMachine]);
+    }, [getServerInfoForMachine]);
 
     const categorizeEvent = useCallback((event) => {
         const logName = event.LogName || event.log_name || event.Log || '';
@@ -222,7 +222,7 @@ const EventViewer = () => {
         console.log(`Event Viewer: Fetching events for single machine: ${machine.name || 'Unknown'} (${machine.ip})`);
         setLoading(true);
         setError(null);
-        setShowSelectMessage(false); // Hide select message when fetching
+        setShowSelectMessage(false);
         isFetchingRef.current = true;
         
         const payload = createEventViewerPayloadForSingleMachine(machine);
@@ -234,11 +234,10 @@ const EventViewer = () => {
         
         console.log('Event Viewer: Sending payload (credentials only, no log_name):', {
             ...payload,
-            windows_info: { ...payload.windows_info, password: '***HIDDEN***' }
+            server_info: { ...payload.server_info, password: '***HIDDEN***' }
         });
         sendCommand('get_event_viewer_data', payload);
 
-        // Clear any existing timeout
         if (timeoutRef.current) {
             clearTimeout(timeoutRef.current);
         }
@@ -279,7 +278,7 @@ const EventViewer = () => {
         console.log(`Event Viewer: Fetching events for ${machinesToUse.length} marked machine(s)...`);
         setLoading(true);
         setError(null);
-        setShowSelectMessage(false); // Hide select message when fetching
+        setShowSelectMessage(false);
         isFetchingRef.current = true;
         
         const payload = createEventViewerPayloadForAllMachines(machinesToUse);
@@ -291,11 +290,10 @@ const EventViewer = () => {
         
         console.log('Event Viewer: Sending payload (credentials only, no log_name):', {
             ...payload,
-            windows_infos: payload.windows_infos.map(info => ({ ...info, password: '***HIDDEN***' }))
+            server_infos: payload.server_infos.map(info => ({ ...info, password: '***HIDDEN***' }))
         });
         sendCommand('get_event_viewer_data', payload);
 
-        // Clear any existing timeout
         if (timeoutRef.current) {
             clearTimeout(timeoutRef.current);
         }
@@ -349,15 +347,12 @@ const EventViewer = () => {
         
         setMachinesLoading(false);
         
-        // Don't automatically fetch events anymore - wait for user selection
-        // Show select message if there are marked machines
         if (markedMachinesList.length > 0) {
             setShowSelectMessage(true);
         } else {
             setShowMarkModal(true);
         }
         
-        // Reset fetch in progress
         fetchInProgressRef.current = false;
     }, []);
 
@@ -379,14 +374,8 @@ const EventViewer = () => {
                 throw new Error('No authentication token found');
             }
             
-            // FIX: We need to get machines WITH passwords
-            // Try different endpoints that might include passwords
-            
-            // Option 1: Try with include_password=true parameter
             console.log('Event Viewer: Trying to fetch machines WITH passwords...');
             
-            // First, let's try the standard endpoint but we need to see what endpoints are available
-            // Based on your logs, try /api/machines/get-machines first
             const response = await fetch(`${API_BASE_URL}/api/machines/get-machines?include_password=true`, {
                 method: 'GET',
                 headers: {
@@ -398,7 +387,6 @@ const EventViewer = () => {
             if (!response.ok) {
                 console.log('Event Viewer: Endpoint with password parameter failed, trying without parameter...');
                 
-                // Try without parameter
                 const response2 = await fetch(`${API_BASE_URL}/api/machines/get-machines`, {
                     method: 'GET',
                     headers: {
@@ -428,7 +416,6 @@ const EventViewer = () => {
                 setMachinesLoading(false);
             }
             
-            // Fallback to WebSocket only if component is still mounted
             if (mountedRef.current && isConnected) {
                 console.log('Event Viewer: Falling back to WebSocket for get_machine_info');
                 sendCommand('get_machine_info', {});
@@ -438,7 +425,6 @@ const EventViewer = () => {
         }
         
         async function processMachineData(data) {
-            // Process the data - adjust based on your API response structure
             let machines = [];
             if (data.machines && Array.isArray(data.machines)) {
                 machines = data.machines;
@@ -457,11 +443,12 @@ const EventViewer = () => {
                     ip: machines[0].ip,
                     hasPassword: !!(machines[0].password || machines[0].password_provided),
                     hasUsername: !!(machines[0].username || machines[0].username_provided),
+                    os_type: machines[0].os_type,
+                    sub_os_type: machines[0].sub_os_type,
                     marked_as: machines[0].marked_as
                 });
             }
             
-            // Filter for marked machines
             const markedMachinesList = machines.filter(machine => {
                 const hasMarks = machine.marked_as && 
                                Array.isArray(machine.marked_as) && 
@@ -472,6 +459,8 @@ const EventViewer = () => {
                         id: machine.id,
                         hasPassword: !!(machine.password || machine.password_provided),
                         hasUsername: !!(machine.username || machine.username_provided),
+                        os_type: machine.os_type,
+                        sub_os_type: machine.sub_os_type,
                         marks: machine.marked_as
                     });
                 }
@@ -481,7 +470,6 @@ const EventViewer = () => {
             
             console.log(`Event Viewer: Found ${markedMachinesList.length} marked machines:`, markedMachinesList);
             
-            // Check if passwords are available
             const machinesWithPasswords = markedMachinesList.filter(machine => {
                 const hasPassword = machine.password || machine.password_provided;
                 if (!hasPassword) {
@@ -499,14 +487,11 @@ const EventViewer = () => {
                 setError('Marked machines found but no passwords available. Please check machine credentials in Machine Management.');
                 setShowMarkModal(true);
             } else {
-                // Show select message when machines are loaded
                 setShowSelectMessage(true);
             }
             
             setMarkedMachines(markedMachinesList);
             setMachinesLoading(false);
-            
-            // Don't automatically fetch events - wait for user selection
         }
     }, [API_BASE_URL, isConnected, sendCommand]);
 
@@ -712,7 +697,6 @@ const EventViewer = () => {
                 fetchEventDataForSingleMachine(machine);
             }
         } else {
-            // When user selects "Select a machine" option, show the message again
             setShowSelectMessage(true);
             setEvents({
                 system: [],
@@ -762,12 +746,10 @@ const EventViewer = () => {
         fetchMachineInfo();
     }, [fetchMachineInfo]);
 
-    // Initialize on component mount
     useEffect(() => {
         console.log('Event Viewer Component Mounted');
         mountedRef.current = true;
         
-        // Fetch machines immediately on mount
         fetchMachineInfo();
         
         return () => {

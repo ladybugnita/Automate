@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import './NetworkManagement.css';
 import axios from 'axios';
 
-const API_BASE_URL = "http://192.168.1.72:5000/api";
+const API_BASE_URL = "http://192.168.1.11:5000/api";
 
 const NetworkManagement = () => {
   const [deviceForm, setDeviceForm] = useState({
@@ -19,7 +19,7 @@ const NetworkManagement = () => {
   const [isAddingDevice, setIsAddingDevice] = useState(false);
   const [isDeletingDevice, setIsDeletingDevice] = useState({});
   const [showPassword, setShowPassword] = useState(false);
-  const [apiStatus, setApiStatus] = useState('idle'); // idle, loading, success, error
+  const [apiStatus, setApiStatus] = useState('idle'); 
 
   useEffect(() => {
     console.log('=== API DEBUG ===');
@@ -52,9 +52,7 @@ const NetworkManagement = () => {
     { value: 'other', label: 'Other' }
   ];
 
-  // Get auth headers for API calls - FIXED
   const getAuthHeaders = () => {
-    // Get token directly from localStorage
     const token = localStorage.getItem('token') || '';
     console.log('Getting auth headers with token:', token ? 'Present' : 'Missing');
     if (!token) {
@@ -66,7 +64,6 @@ const NetworkManagement = () => {
     };
   };
 
-  // Check API health
   const checkApiHealth = async () => {
     try {
       const token = localStorage.getItem('token') || '';
@@ -91,7 +88,6 @@ const NetworkManagement = () => {
       
       if (token) {
         try {
-          // Try to load devices directly first
           await loadDevices();
           setApiStatus('success');
         } catch (error) {
@@ -106,7 +102,6 @@ const NetworkManagement = () => {
     init();
   }, []);
 
-  // Load devices via REST API
   const loadDevices = async () => {
     setIsLoadingDevices(true);
     try {
@@ -161,7 +156,6 @@ const NetworkManagement = () => {
     }
   };
 
-  // Add device via REST API
   const addDevice = async (deviceData) => {
     const fullUrl = `${API_BASE_URL}/network-devices/add-network-device`;
     console.log('Calling URL:', fullUrl);
@@ -178,7 +172,6 @@ const NetworkManagement = () => {
     return response.data;
   };
 
-  // Delete device via REST API
   const deleteDevice = async (deviceId) => {
     const fullUrl = `${API_BASE_URL}/network-devices/delete-network-device/${deviceId}`;
     console.log('Calling URL:', fullUrl);
@@ -194,7 +187,6 @@ const NetworkManagement = () => {
     return response.data;
   };
 
-  // Update device via REST API (optional - if you need it)
   const updateDevice = async (deviceId, updateData) => {
     const fullUrl = `${API_BASE_URL}/network-devices/update-network-device/${deviceId}`;
     console.log('Calling URL:', fullUrl);
@@ -239,20 +231,17 @@ const NetworkManagement = () => {
   const handleAddDevice = async (e) => {
     e.preventDefault();
     
-    // Check API status
     if (apiStatus === 'error') {
       alert('Cannot add device. API connection failed. Please check backend server.');
       return;
     }
     
-    // Check authentication
     const token = localStorage.getItem('token');
     if (!token) {
       alert('Please log in to add network devices.');
       return;
     }
     
-    // Validation
     if (!deviceForm.name || !deviceForm.ip || !deviceForm.username || !deviceForm.password) {
       alert('Please fill in all required fields (Device Name, IP Address, Username, and Password)');
       return;
@@ -279,7 +268,7 @@ const NetworkManagement = () => {
       if (result.success) {
         alert('Network device added successfully!');
         resetForm();
-        loadDevices(); // Refresh the list
+        loadDevices(); 
       } else {
         const errorMessage = result.error || result.message || 'Unknown error occurred';
         alert(`Error: ${errorMessage}`);
@@ -308,7 +297,6 @@ const NetworkManagement = () => {
   };
 
   const handleDeleteDevice = async (deviceId) => {
-    // Check API status
     if (apiStatus === 'error') {
       alert('Cannot delete device. API connection failed.');
       return;
@@ -328,7 +316,7 @@ const NetworkManagement = () => {
       
       if (result.success) {
         alert('Network device deleted successfully!');
-        loadDevices(); // Refresh the list
+        loadDevices(); 
       } else {
         const errorMessage = result.error || result.message || 'Unknown error occurred';
         alert(`Error: ${errorMessage}`);
@@ -404,13 +392,10 @@ const NetworkManagement = () => {
     setShowPassword(!showPassword);
   };
 
-  // Check if API is available
   const isApiAvailable = apiStatus === 'success';
   
-  // Check if user is authenticated
   const isAuthenticated = !!localStorage.getItem('token');
   
-  // Check if device is being deleted
   const isDeviceDeleting = (deviceId) => isDeletingDevice[deviceId] || false;
 
   return (

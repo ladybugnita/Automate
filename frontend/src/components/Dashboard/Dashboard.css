@@ -590,12 +590,6 @@
     min-height: 400px;
   }
 }
-
-
-
-
-
-/* Mini CPU Graph Styles */
 .cpu-cell-with-graph {
   display: flex;
   align-items: center;
@@ -722,12 +716,10 @@
   color: #333;
 }
 
-/* Adjust table cells for new layout */
 .machines-table td {
   vertical-align: middle;
 }
 
-/* Responsive adjustments */
 @media (max-width: 1400px) {
   .cpu-graph-container {
     min-width: 100px;

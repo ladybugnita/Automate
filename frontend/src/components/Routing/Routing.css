@@ -567,7 +567,6 @@
   border-bottom: 1px solid var(--primary-light);
 }
 
-/* Warning Message */
 .warning-message {
   background: linear-gradient(135deg, var(--warning-lighter) 0%, var(--warning-light) 100%);
   border: 1px solid var(--warning-color);

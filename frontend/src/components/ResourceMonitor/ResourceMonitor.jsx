@@ -62,13 +62,13 @@ function ResourceMonitor() {
     return responseData;
   };
 
-  const getWindowsInfoForMachine = useCallback((machine) => {
+  const getServerInfoForMachine = useCallback((machine) => {
     if (!machine) {
-      console.error('ResourceMonitor: No machine provided to getWindowsInfoForMachine');
+      console.error('ResourceMonitor: No machine provided to getServerInfoForMachine');
       return null;
     }
     
-    console.log(`ResourceMonitor: Getting Windows info for machine: ${machine.name || 'Unknown'} (${machine.ip})`);
+    console.log(`ResourceMonitor: Getting server info for machine: ${machine.name || 'Unknown'} (${machine.ip})`);
     
     const password = machine.password || machine.password_provided || '';
     
@@ -83,7 +83,9 @@ function ResourceMonitor() {
     return {
       ip: machine.ip,
       username: machine.username || machine.username_provided || 'admin',
-      password: password
+      password: password,
+      os_type: machine.os_type || '',
+      sub_os_type: machine.sub_os_type || ''
     };
   }, []);
 
@@ -94,17 +96,17 @@ function ResourceMonitor() {
       return null;
     }
     
-    const windowsInfo = getWindowsInfoForMachine(machine);
-    if (!windowsInfo) {
+    const serverInfo = getServerInfoForMachine(machine);
+    if (!serverInfo) {
       return null;
     }
     
     console.log(`ResourceMonitor: Creating payload for single machine: ${machine.name || 'Unknown'} (${machine.ip})`);
     
     return {
-      windows_info: windowsInfo
+      server_info: serverInfo
     };
-  }, [getWindowsInfoForMachine]);
+  }, [getServerInfoForMachine]);
 
   const createResourcePayloadForAllMachines = useCallback((machines) => {
     if (!machines || machines.length === 0) {
@@ -113,29 +115,29 @@ function ResourceMonitor() {
       return null;
     }
     
-    const windowsInfos = [];
+    const serverInfos = [];
     
     machines.forEach(machine => {
-      const windowsInfo = getWindowsInfoForMachine(machine);
-      if (windowsInfo) {
-        windowsInfos.push(windowsInfo);
+      const serverInfo = getServerInfoForMachine(machine);
+      if (serverInfo) {
+        serverInfos.push(serverInfo);
       } else {
-        console.error(`ResourceMonitor: Failed to get Windows info for machine: ${machine.name || 'Unknown'} (${machine.ip})`);
+        console.error(`ResourceMonitor: Failed to get server info for machine: ${machine.name || 'Unknown'} (${machine.ip})`);
       }
     });
     
-    if (windowsInfos.length === 0) {
-      console.error('ResourceMonitor: Failed to get Windows info for any marked machine');
+    if (serverInfos.length === 0) {
+      console.error('ResourceMonitor: Failed to get server info for any marked machine');
       setError('Failed to get credentials for marked machines. Please check that all marked machines have valid credentials in Machine Management.');
       return null;
     }
     
-    console.log(`ResourceMonitor: Creating payload for ${windowsInfos.length} machine(s)`);
+    console.log(`ResourceMonitor: Creating payload for ${serverInfos.length} machine(s)`);
     
     return {
-      windows_infos: windowsInfos
+      server_infos: serverInfos
     };
-  }, [getWindowsInfoForMachine]);
+  }, [getServerInfoForMachine]);
 
   const parseAndSummarizeResourceData = useCallback((resourceData, machineIp) => {
     console.log('ResourceMonitor: Parsing and summarizing resource data:', resourceData);
@@ -333,10 +335,10 @@ function ResourceMonitor() {
     
     console.log('ResourceMonitor: Sending payload (credentials only):', {
       ...payload,
-      windows_info: { ...payload.windows_info, password: '***HIDDEN***' }
+      server_info: { ...payload.server_info, password: '***HIDDEN***' }
     });
     
-    sendCommand('get_resource_monitor_data_windows_ansible', payload);
+    sendCommand('get_resource_monitor_data_server_ansible', payload);
 
     if (timeoutRef.current) {
       clearTimeout(timeoutRef.current);
@@ -390,10 +392,10 @@ function ResourceMonitor() {
     
     console.log('ResourceMonitor: Sending payload (credentials only):', {
       ...payload,
-      windows_infos: payload.windows_infos.map(info => ({ ...info, password: '***HIDDEN***' }))
+      server_infos: payload.server_infos.map(info => ({ ...info, password: '***HIDDEN***' }))
     });
     
-    sendCommand('get_resource_monitor_data_windows_ansible', payload);
+    sendCommand('get_resource_monitor_data_server_ansible', payload);
 
     if (timeoutRef.current) {
       clearTimeout(timeoutRef.current);
@@ -544,6 +546,8 @@ function ResourceMonitor() {
           ip: machines[0].ip,
           hasPassword: !!(machines[0].password || machines[0].password_provided),
           hasUsername: !!(machines[0].username || machines[0].username_provided),
+          os_type: machines[0].os_type,
+          sub_os_type: machines[0].sub_os_type,
           marked_as: machines[0].marked_as
         });
       }
@@ -558,6 +562,8 @@ function ResourceMonitor() {
             id: machine.id,
             hasPassword: !!(machine.password || machine.password_provided),
             hasUsername: !!(machine.username || machine.username_provided),
+            os_type: machine.os_type,
+            sub_os_type: machine.sub_os_type,
             marks: machine.marked_as
           });
         }
@@ -656,7 +662,7 @@ function ResourceMonitor() {
         }
         break;
         
-      case 'get_resource_monitor_data_windows_ansible':
+      case 'get_resource_monitor_data_server_ansible':
         console.log('ResourceMonitor: Processing resource monitor data (new format)');
         isFetchingRef.current = false;
         

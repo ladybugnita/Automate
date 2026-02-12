@@ -23,7 +23,6 @@ const Users = () => {
   const [userToDelete, setUserToDelete] = useState('');
   const [loading, setLoading] = useState(false);
 
-  // Refs for managing state
   const isFetchingRef = useRef(false);
   const timeoutRef = useRef(null);
   const machineInfoListenerRef = useRef(false);
@@ -31,16 +30,13 @@ const Users = () => {
   const mountedRef = useRef(false);
   const initialFetchRef = useRef(false);
   
-  // Command flow management refs
   const commandInProgressRef = useRef(false);
   const pendingCommandsRef = useRef([]);
   const lastUserFetchTimeRef = useRef(0);
-  const commandCooldownTime = 1000; // 1 second cooldown between same commands
+  const commandCooldownTime = 1000; 
 
-  // Payload tracking ref to match responses with machines
   const sentPayloadsRef = useRef({});
 
-  // Get the API base URL dynamically - memoized to prevent recreation
   const API_BASE_URL = useMemo(() => {
     if (typeof window !== 'undefined') {
       const currentHost = window.location.hostname;
@@ -54,31 +50,25 @@ const Users = () => {
     }
     return 'http://localhost:5000';
   }, []);
-
-  // ============ COMMAND FLOW MANAGEMENT ============
   
   const sendCommandWithFlow = useCallback((command, payload = null, forceRefresh = false) => {
     console.log(`Users: SENDING COMMAND: ${command}`, payload ? 'with payload' : 'no payload', forceRefresh ? '(force refresh)' : '');
     
-    // Store the payload for tracking
-    if (payload && payload.windows_info && payload.windows_info.ip) {
-      const machineIp = payload.windows_info.ip;
+    if (payload && payload.server_info && payload.server_info.ip) {
+      const machineIp = payload.server_info.ip;
       sentPayloadsRef.current[machineIp] = {
         command,
         payload: JSON.parse(JSON.stringify(payload)),
         timestamp: Date.now(),
-        forceRefresh // Store forceRefresh flag separately
+        forceRefresh 
       };
       console.log(`Users: Stored payload for machine ${machineIp}`, forceRefresh ? '(force refresh)' : '');
     }
     
-    // For get_local_users_windows, bypass cooldown if we're refreshing after add/delete
-    if (command === 'get_local_users_windows') {
+    if (command === 'get_local_users_server') {
       const now = Date.now();
       const timeSinceLastFetch = now - lastUserFetchTimeRef.current;
       
-      // Only apply cooldown for normal fetches, not for refresh-after-operation
-      // Use the forceRefresh parameter passed to this function
       if (timeSinceLastFetch < commandCooldownTime && !forceRefresh) {
         console.log(`Users: Skipping duplicate ${command} command (cooldown: ${commandCooldownTime - timeSinceLastFetch}ms remaining)`);
         return;
@@ -86,26 +76,19 @@ const Users = () => {
       lastUserFetchTimeRef.current = now;
     }
     
-    // Check if a command is already in progress
     if (commandInProgressRef.current) {
       console.log(`Users: Command ${command} is already in progress, queueing...`);
       pendingCommandsRef.current.push({ command, payload, forceRefresh });
       return;
     }
     
-    // Mark command as in progress
     commandInProgressRef.current = true;
-    
-    // Send the command - IMPORTANT: Clone payload to avoid mutation issues
-    // Do NOT include _forceRefresh in the payload sent to backend
     const payloadToSend = payload ? JSON.parse(JSON.stringify(payload)) : null;
     sendCommand(command, payloadToSend);
     
-    // Set a timeout to clear the in-progress flag
     setTimeout(() => {
       commandInProgressRef.current = false;
       
-      // Process any pending commands
       if (pendingCommandsRef.current.length > 0) {
         const nextCommand = pendingCommandsRef.current.shift();
         console.log(`Users: Processing queued command: ${nextCommand.command}`);
@@ -122,8 +105,6 @@ const Users = () => {
     }
   }, [sendCommandWithFlow]);
 
-  // ============ UTILITY FUNCTIONS ============
-
   const extractResult = (responseData) => {
     if (!responseData) return null;
     
@@ -138,15 +119,13 @@ const Users = () => {
     return responseData;
   };
 
-  // ============ MACHINE MANAGEMENT ============
-
-  const getWindowsInfoForMachine = useCallback((machine) => {
+  const getServerInfoForMachine = useCallback((machine) => {
     if (!machine) {
-      console.error('Users: No machine provided to getWindowsInfoForMachine');
+      console.error('Users: No machine provided to getServerInfoForMachine');
       return null;
     }
     
-    console.log(`Users: Getting Windows info for machine: ${machine.name || 'Unknown'} (${machine.ip})`);
+    console.log(`Users: Getting server info for machine: ${machine.name || 'Unknown'} (${machine.ip})`);
     
     const password = machine.password || machine.password_provided || '';
     const username = machine.username || machine.username_provided || 'Administrator';
@@ -165,7 +144,9 @@ const Users = () => {
     return {
       ip: machine.ip,
       username: username,
-      password: password
+      password: password,
+      os_type: machine.os_type || '',
+      sub_os_type: machine.sub_os_type || ''
     };
   }, []);
 
@@ -254,6 +235,8 @@ const Users = () => {
             id: machine.id,
             hasPassword: !!(machine.password || machine.password_provided),
             hasUsername: !!(machine.username || machine.username_provided),
+            os_type: machine.os_type,
+            sub_os_type: machine.sub_os_type,
             marks: machine.marked_as
           });
         }
@@ -284,11 +267,10 @@ const Users = () => {
       } else {
         console.log('Users: Machine fetch complete.');
         
-        // ALWAYS default to "Select a machine..." option - NEVER auto-select
         console.log('Users: Defaulting to "Select a machine..." option');
         setSelectedMachine('');
         setNewUser(prev => ({ ...prev, machineIp: '' }));
-        localStorage.removeItem('users_selected_machine'); // Clear saved selection
+        localStorage.removeItem('users_selected_machine'); 
         
         setSelectedMachineUsers([]);
         initialFetchRef.current = true;
@@ -303,19 +285,17 @@ const Users = () => {
       return null;
     }
     
-    const windowsInfo = getWindowsInfoForMachine(machine);
-    if (!windowsInfo) {
+    const serverInfo = getServerInfoForMachine(machine);
+    if (!serverInfo) {
       return null;
     }
     
     console.log(`Users: Creating payload for single machine: ${machine.name || 'Unknown'} (${machine.ip})`);
     
     return {
-      windows_info: windowsInfo
+      server_info: serverInfo
     };
-  }, [getWindowsInfoForMachine]);
-
-  // ============ USER FETCHING FUNCTIONS ============
+  }, [getServerInfoForMachine]);
 
   const fetchUsersForSingleMachine = useCallback((machine, forceRefresh = false) => {
     if (isFetchingRef.current || !mountedRef.current) {
@@ -341,16 +321,12 @@ const Users = () => {
       return;
     }
     
-    // Don't add _forceRefresh to the payload - it's for frontend cooldown only
-    // The backend doesn't need this flag
-    
-    console.log('Users: Sending get_local_users_windows command for single machine with payload:', {
+    console.log('Users: Sending get_local_users_server command for single machine with payload:', {
       ...payload,
-      windows_info: { ...payload.windows_info, password: '***HIDDEN***' }
+      server_info: { ...payload.server_info, password: '***HIDDEN***' }
     });
     
-    // Pass forceRefresh as separate parameter, not in payload
-    sendCommandWithFlow('get_local_users_windows', payload, forceRefresh);
+    sendCommandWithFlow('get_local_users_server', payload, forceRefresh);
     
     if (timeoutRef.current) {
       clearTimeout(timeoutRef.current);
@@ -368,8 +344,6 @@ const Users = () => {
     
   }, [isConnected, createUsersPayloadForSingleMachine, sendCommandWithFlow]);
 
-  // ============ WEBSOCKET MESSAGE HANDLER ============
-
   const handleWebSocketMessage = useCallback((data) => {
     if (!mountedRef.current) return;
     
@@ -377,7 +351,6 @@ const Users = () => {
     
     let command, result, error, payload, messageData;
     
-    // Parse the incoming message
     if (typeof data === 'string') {
       try {
         messageData = JSON.parse(data);
@@ -391,7 +364,6 @@ const Users = () => {
     
     console.log('Users: Parsed message data:', messageData);
     
-    // Extract command and result based on different message formats
     if (messageData.action === 'response') {
       command = messageData.command;
       result = messageData.result;
@@ -404,11 +376,9 @@ const Users = () => {
       error = responseObj.error;
       payload = responseObj.payload;
     } else if (messageData.type === 'COMMAND_RESPONSE') {
-      // FIXED: Handle COMMAND_RESPONSE format from middleware
       command = messageData.command;
-      result = messageData.data; // Data is in 'data' field, not 'result'
+      result = messageData.data; 
       error = messageData.error;
-      // Try to extract payload from original data if available
       if (messageData.originalData && messageData.originalData.payload) {
         payload = messageData.originalData.payload;
       }
@@ -429,7 +399,6 @@ const Users = () => {
     
     console.log(`Users: Processing response for command: ${command}`, { result, error });
     
-    // Handle errors first
     if (error) {
       console.log(`Users: Error from backend for command ${command}:`, error);
       setError(`Error: ${error}`);
@@ -445,9 +414,8 @@ const Users = () => {
       return;
     }
     
-    // Process successful responses
     switch(command) {
-      case 'get_local_users_windows':
+      case 'get_local_users_server':
         console.log('Users: Processing local users response');
         isFetchingRef.current = false;
         
@@ -456,21 +424,17 @@ const Users = () => {
           timeoutRef.current = null;
         }
         
-        // Extract the result data
-        let responseData = result; // Data is already in result for COMMAND_RESPONSE format
+        let responseData = result; 
         console.log('Users: Processed response data:', responseData);
         
-        // Extract machine IP - use stored payload tracking
         let machineIp = '';
         const currentSelectedMachine = localStorage.getItem('users_selected_machine') || '';
         
-        // First try to get IP from stored payloads
         if (currentSelectedMachine && sentPayloadsRef.current[currentSelectedMachine]) {
           machineIp = currentSelectedMachine;
           console.log('Users: Found stored payload for machine:', machineIp);
         }
         
-        // Clean up old payloads (older than 30 seconds)
         const now = Date.now();
         Object.keys(sentPayloadsRef.current).forEach(key => {
           if (now - sentPayloadsRef.current[key].timestamp > 30000) {
@@ -490,15 +454,11 @@ const Users = () => {
           return;
         }
         
-        // Process the user data
         if (responseData && responseData.local_user_details) {
           console.log('Users: Found local_user_details in response:', responseData.local_user_details);
           
-          // Convert the object to array format for display
-          // The keys are user1, user2, etc.
           const usersArray = [];
           Object.values(responseData.local_user_details).forEach((user, index) => {
-            // Ensure we have valid user data
             if (user && (user.username || user.Name)) {
               const username = user.username || user.Name || 'Unknown';
               usersArray.push({
@@ -517,13 +477,11 @@ const Users = () => {
           
           console.log(`Users: Converted ${usersArray.length} users for machine ${machineIp}:`, usersArray);
           
-          // Update state
           setAllUsers(prev => ({
             ...prev,
             [machineIp]: usersArray
           }));
           
-          // Update selected machine users if this is the currently selected machine
           if (currentSelectedMachine === machineIp) {
             setSelectedMachineUsers(usersArray);
             console.log('Users: Updated selected machine users:', usersArray.length);
@@ -534,7 +492,6 @@ const Users = () => {
           setError(null);
           
         } else if (responseData && responseData.message) {
-          // Handle empty response case
           console.log('Users: Response with message:', responseData.message);
           
           setAllUsers(prev => ({
@@ -555,7 +512,6 @@ const Users = () => {
           setUsersLoading(false);
         }
         
-        // Clean up the stored payload
         if (sentPayloadsRef.current[machineIp]) {
           delete sentPayloadsRef.current[machineIp];
           console.log(`Users: Cleaned up payload for machine: ${machineIp}`);
@@ -565,7 +521,7 @@ const Users = () => {
         processNextCommand();
         break;
         
-      case 'add_local_users_windows':
+      case 'add_local_users_server':
         console.log('Users: Processing add local user response');
         setLoading(false);
         
@@ -589,17 +545,13 @@ const Users = () => {
             password: '' 
           }));
           
-          // Get current selected machine from localStorage
           const currentSelectedMachine = localStorage.getItem('users_selected_machine');
           if (currentSelectedMachine) {
             console.log('Users: Triggering immediate user refresh after add operation');
             
-            // Clear the current users to show loading state
             setSelectedMachineUsers([]);
             
-            // Wait 1 second to ensure backend has processed the user creation
             setTimeout(() => {
-              // Get current marked machines from state
               const machine = markedMachines.find(m => m.ip === currentSelectedMachine);
               if (machine) {
                 fetchUsersForSingleMachine(machine, true);
@@ -616,7 +568,7 @@ const Users = () => {
         processNextCommand();
         break;
         
-      case 'delete_local_users_windows':
+      case 'delete_local_users_server':
         console.log('Users: Processing delete local user response');
         setLoading(false);
         
@@ -636,15 +588,12 @@ const Users = () => {
           
           setUserToDelete('');
           
-          // Get current selected machine from localStorage
           const currentSelectedMachine = localStorage.getItem('users_selected_machine');
           if (currentSelectedMachine) {
             console.log('Users: Triggering immediate user refresh after delete operation');
             
-            // Clear current users to show loading state
             setSelectedMachineUsers([]);
             
-            // Wait longer to ensure backend has processed everything
             setTimeout(() => {
               const machine = markedMachines.find(m => m.ip === currentSelectedMachine);
               if (machine) {
@@ -671,8 +620,6 @@ const Users = () => {
     
   }, [fetchUsersForSingleMachine, processNextCommand, markedMachines]);
 
-  // ============ EVENT HANDLERS ============
-
   const handleMachineSelect = useCallback((machineIp) => {
     if (!machineIp) {
       setSelectedMachine('');
@@ -686,7 +633,7 @@ const Users = () => {
     localStorage.setItem('users_selected_machine', machineIp);
     setNewUser(prev => ({ ...prev, machineIp }));
     
-    setSelectedMachineUsers([]); // Clear old users
+    setSelectedMachineUsers([]); 
     const machine = markedMachines.find(m => m.ip === machineIp);
     if (machine) {
       fetchUsersForSingleMachine(machine);
@@ -724,7 +671,6 @@ const Users = () => {
     fetchMachineInfo();
   }, [fetchMachineInfo]);
 
-  // Function to validate password complexity
   const validatePasswordComplexity = (password) => {
     const hasUpperCase = /[A-Z]/.test(password);
     const hasLowerCase = /[a-z]/.test(password);
@@ -789,24 +735,24 @@ const Users = () => {
       username: newUser.username
     });
 
-    const windowsInfo = getWindowsInfoForMachine(selectedMachineObj);
-    if (!windowsInfo) {
+    const serverInfo = getServerInfoForMachine(selectedMachineObj);
+    if (!serverInfo) {
       setLoading(false);
       return;
     }
     
     const payload = {
-      windows_info: windowsInfo,
+      server_info: serverInfo,
       new_username: newUser.username,
       new_password: newUser.password
     };
     
     console.log('Users: Sending add user payload:', {
       ...payload,
-      windows_info: { ...payload.windows_info, password: '***HIDDEN***' }
+      server_info: { ...payload.server_info, password: '***HIDDEN***' }
     });
     
-    sendCommandWithFlow('add_local_users_windows', payload);
+    sendCommandWithFlow('add_local_users_server', payload);
   };
 
   const handleDeleteUser = (username) => {
@@ -838,32 +784,28 @@ const Users = () => {
       username: username
     });
 
-    const windowsInfo = getWindowsInfoForMachine(selectedMachineObj);
-    if (!windowsInfo) {
+    const serverInfo = getServerInfoForMachine(selectedMachineObj);
+    if (!serverInfo) {
       setLoading(false);
       return;
     }
     
-    // Extract just the username part (in case it's in domain\username format)
-    // Use the OriginalUsername if available, otherwise extract from the display name
     const usernameToDelete = username.includes('\\') ? username.split('\\').pop() : username;
     
     console.log('Users: Using username for deletion:', usernameToDelete);
     
     const payload = {
-      windows_info: windowsInfo,
+      server_info: serverInfo,
       username_to_delete: usernameToDelete
     };
     
     console.log('Users: Sending delete user payload:', {
       ...payload,
-      windows_info: { ...payload.windows_info, password: '***HIDDEN***' }
+      server_info: { ...payload.server_info, password: '***HIDDEN***' }
     });
     
-    sendCommandWithFlow('delete_local_users_windows', payload);
+    sendCommandWithFlow('delete_local_users_server', payload);
   };
-
-  // ============ FORMATTING FUNCTIONS ============
 
   const formatDate = (dateString) => {
     if (!dateString || dateString === 'Never' || dateString === 'null') return 'Never';
@@ -894,14 +836,10 @@ const Users = () => {
     return total;
   };
 
-  // ============ USE EFFECTS ============
-
-  // Initialize on component mount
   useEffect(() => {
     console.log('Users Component Mounted');
     mountedRef.current = true;
     
-    // Fetch machines immediately on mount
     fetchMachineInfo();
     
     return () => {
@@ -920,7 +858,6 @@ const Users = () => {
     };
   }, [fetchMachineInfo]);
 
-  // Set up WebSocket listener
   useEffect(() => {
     if (!machineInfoListenerRef.current && mountedRef.current) {
       console.log('Users: Setting up WebSocket listener');
@@ -935,8 +872,6 @@ const Users = () => {
       };
     }
   }, [addListener, handleWebSocketMessage]);
-
-  // ============ MODAL COMPONENT ============
 
   const MarkMachineModal = () => {
     if (!showMarkModal) return null;
@@ -987,8 +922,6 @@ const Users = () => {
       </div>
     );
   };
-
-  // ============ MACHINE SELECTOR COMPONENT ============
 
   const MachineSelector = () => {
     if (machinesLoading) {

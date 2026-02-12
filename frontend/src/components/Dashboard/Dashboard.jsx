@@ -21,13 +21,10 @@ const Dashboard = () => {
   const refreshTimeoutRef = useRef(null);
   const commandTimeoutsRef = useRef([]);
 
-  // ============ WEBSOCKET MESSAGE HANDLER ============
-
   useEffect(() => {
     const handleWebSocketMessage = (data) => {
       console.log('Dashboard WebSocket message:', data);
 
-      // Handle both response formats
       let command, result;
       
       if (data.type === 'COMMAND_RESPONSE' && data.command && data.data) {
@@ -37,42 +34,36 @@ const Dashboard = () => {
         command = data.command;
         result = data.result;
       } else {
-        return; // Not a response we care about
+        return; 
       }
 
       console.log(`Processing response for command: ${command}`, result);
 
-      // Handle the get_all_windows_details_dashboard command
-      if (command === 'get_all_windows_details_dashboard') {
+      if (command === 'get_all_server_details_dashboard') {
         console.log('Stopping refresh state for dashboard command');
         setIsRefreshing(false);
         
-        // Check for success in different formats
         const success = result.success === true || 
                        (result.windows1 && result.windows2) || 
                        result.machines;
         
         if (!success) {
           console.error('Dashboard command failed:', result.error || result.message);
-          setError(result.error || result.message || 'Failed to fetch Windows details');
+          setError(result.error || result.message || 'Failed to fetch server details');
           setDataLoaded(false);
           return;
         }
 
-        console.log('Received Windows details:', result);
+        console.log('Received server details:', result);
 
         let machinesArray = [];
         
-        // FORMAT 1: machines array format (from logs)
         if (result.machines && Array.isArray(result.machines)) {
           machinesArray = result.machines;
         } 
-        // FORMAT 2: windows1, windows2 object format (from socket.js sample)
         else if (result.windows1 || result.windows2) {
-          // Convert windows1, windows2 objects to array
           machinesArray = [];
           
-          // Check all possible windows keys (windows1, windows2, windows3, etc.)
           Object.keys(result).forEach(key => {
             if (key.startsWith('windows') && typeof result[key] === 'object') {
               const machineData = result[key];
@@ -80,8 +71,8 @@ const Dashboard = () => {
                 id: `machine_${key.replace('windows', '')}`,
                 name: `Windows-${machineData.ip || machineData.hostname || key}`,
                 ip_address: machineData.ip || 'Unknown',
-                username: 'Administrator', // Default
-                status: 'online', // Default
+                username: 'Administrator', 
+                status: 'online', 
                 os_version: 'Windows OS',
                 cpu_cores: 0,
                 memory_gb: 0,
@@ -107,7 +98,6 @@ const Dashboard = () => {
         if (machinesArray.length > 0) {
           const newCpuHistories = { ...cpuHistories };
 
-          // Update CPU history for each machine
           machinesArray.forEach((machine, index) => {
             const machineKey = `machine_${index + 1}`;
             const cpuValue = machine.performance?.cpu_usage ? parseFloat(machine.performance.cpu_usage) : 0;
@@ -116,22 +106,19 @@ const Dashboard = () => {
               newCpuHistories[machineKey] = [];
             }
             const updatedHistory = [...newCpuHistories[machineKey], cpuValue];
-            newCpuHistories[machineKey] = updatedHistory.slice(-12); // Keep last 12 readings
+            newCpuHistories[machineKey] = updatedHistory.slice(-12); 
           });
 
           setWindowsDetails(machinesArray);
           setCpuHistories(newCpuHistories);
           
-          // Store summary data if available
           if (result.summary) {
             setSummaryData(result.summary);
           } else if (machinesArray.length > 0) {
-            // Create summary data from machines
             const totalMachines = machinesArray.length;
             const onlineMachines = machinesArray.filter(m => m.status === 'online').length;
             const offlineMachines = totalMachines - onlineMachines;
             
-            // Calculate averages
             const totalCpu = machinesArray.reduce((sum, machine) => {
               return sum + (machine.performance?.cpu_usage || 0);
             }, 0);
@@ -166,7 +153,6 @@ const Dashboard = () => {
           setDataLoaded(false);
         }
 
-        // Clear any refresh timeout
         if (refreshTimeoutRef.current) {
           clearTimeout(refreshTimeoutRef.current);
           refreshTimeoutRef.current = null;
@@ -174,7 +160,6 @@ const Dashboard = () => {
       }
     };
 
-    // Add the listener
     const removeListener = addListener(handleWebSocketMessage);
 
     return () => {
@@ -182,20 +167,17 @@ const Dashboard = () => {
     };
   }, [addListener, cpuHistories]);
 
-  // ============ COMMAND FUNCTIONS ============
-
   const fetchAllWindowsDetails = useCallback(() => {
     if (!isConnected) {
-      console.log('Cannot fetch Windows details: Not connected to backend');
+      console.log('Cannot fetch server details: Not connected to backend');
       setError('Not connected to backend system');
       setIsRefreshing(false);
       setDataLoaded(false);
       return;
     }
 
-    console.log('Starting to fetch all Windows details...');
+    console.log('Starting to fetch all server details...');
 
-    // First, fetch machines from REST API to get Windows credentials
     fetch('http://localhost:5000/api/machines/get-machines?include_password=true', {
       method: 'GET',
       headers: {
@@ -221,11 +203,9 @@ const Dashboard = () => {
         machines = machinesData;
       }
 
-      // Count total machines from machine_info table
       const machineCount = machines.length;
       setTotalMachines(machineCount);
 
-      // Also fetch network devices count
       fetch('http://localhost:5000/api/network-devices/get-network-devices', {
         method: 'GET',
         headers: {
@@ -254,20 +234,17 @@ const Dashboard = () => {
         const networkDeviceCount = networkDevices.length;
         setTotalNetworkDevices(networkDeviceCount);
 
-        // Filter Windows machines with credentials
         const windowsMachines = machines.filter(machine => 
           machine.password || machine.password_provided
         );
 
         console.log(`Found ${windowsMachines.length} Windows machines with credentials`);
 
-        // Check if there are marked machines
         const markedMachines = machines.filter(machine => 
           machine.marked_as && Array.isArray(machine.marked_as) && machine.marked_as.length > 0
         );
 
         if (markedMachines.length === 0) {
-          // Show modal to create server
           setShowCreateServerModal(true);
           setIsRefreshing(false);
           setDataLoaded(false);
@@ -283,31 +260,29 @@ const Dashboard = () => {
           return;
         }
 
-        // Prepare payload for get_all_windows_details_dashboard
         const payload = {};
         
         windowsMachines.forEach((machine, index) => {
-          const windowsKey = `windows_info${index + 1}`;
-          payload[windowsKey] = {
+          const serverKey = `server_info${index + 1}`;
+          payload[serverKey] = {
             ip: machine.ip,
             username: machine.username || machine.username_provided || 'Administrator',
-            password: machine.password || machine.password_provided
+            password: machine.password || machine.password_provided,
+            os_type: machine.os_type || '',
+            sub_os_type: machine.sub_os_type || ''
           };
         });
 
-        console.log('Sending get_all_windows_details_dashboard with payload:', {
+        console.log('Sending get_all_server_details_dashboard with payload:', {
           ...payload,
-          windows_info1: payload.windows_info1 ? { ...payload.windows_info1, password: '***HIDDEN***' } : null,
-          windows_info2: payload.windows_info2 ? { ...payload.windows_info2, password: '***HIDDEN***' } : null
+          server_info1: payload.server_info1 ? { ...payload.server_info1, password: '***HIDDEN***' } : null,
+          server_info2: payload.server_info2 ? { ...payload.server_info2, password: '***HIDDEN***' } : null
         });
 
-        // Send the command via WebSocket
-        sendCommand('get_all_windows_details_dashboard', payload);
+        sendCommand('get_all_server_details_dashboard', payload);
         
-        // Mark command as sent
-        commandsSentRef.current.add('get_all_windows_details_dashboard');
+        commandsSentRef.current.add('get_all_server_details_dashboard');
 
-        // Set timeout for response
         if (refreshTimeoutRef.current) {
           clearTimeout(refreshTimeoutRef.current);
         }
@@ -340,8 +315,6 @@ const Dashboard = () => {
 
   }, [isConnected, sendCommand, isRefreshing]);
 
-  // ============ REFRESH FUNCTION ============
-
   const refreshData = useCallback(() => {
     if (isConnected && !isRefreshing) {
       console.log('Starting dashboard refresh...');
@@ -351,7 +324,6 @@ const Dashboard = () => {
       setWindowsDetails([]);
       setSummaryData(null);
 
-      // Clear any existing timeouts
       if (refreshTimeoutRef.current) {
         clearTimeout(refreshTimeoutRef.current);
         refreshTimeoutRef.current = null;
@@ -379,7 +351,6 @@ const Dashboard = () => {
     }
   }, [isConnected, isRefreshing, fetchAllWindowsDetails]);
 
-  // ============ INITIAL LOAD ============
 
   useEffect(() => {
     console.log('Dashboard useEffect - isConnected:', isConnected, 'initialLoadRef:', initialLoadRef.current);
@@ -391,7 +362,6 @@ const Dashboard = () => {
       setDataLoaded(false);
       setError(null);
       
-      // Wait a moment then fetch data
       const timeoutId = setTimeout(() => {
         refreshData();
       }, 1000);
@@ -400,27 +370,22 @@ const Dashboard = () => {
     }
   }, [isConnected, refreshData]);
 
-  // ============ WEB SOCKET CONNECTION EFFECT ============
 
   useEffect(() => {
     if (isConnected && isRefreshing && !dataLoaded) {
-      // If we reconnected while refreshing, retry the refresh
       console.log('WebSocket reconnected while refreshing, retrying...');
       refreshData();
     }
   }, [isConnected, isRefreshing, dataLoaded, refreshData]);
 
-  // ============ SAFETY TIMEOUT ============
-
   useEffect(() => {
-    // Only set safety timeout if we're refreshing and haven't received response
     if (isRefreshing && !dataLoaded) {
       refreshTimeoutRef.current = setTimeout(() => {
         if (isRefreshing && !dataLoaded) {
           console.log('Safety timeout reached, still refreshing but no response yet');
           console.log('Current state - isRefreshing:', isRefreshing, 'dataLoaded:', dataLoaded);
         }
-      }, 30000); // 30 second safety check - just for logging
+      }, 30000); 
     }
 
     return () => {
@@ -429,8 +394,6 @@ const Dashboard = () => {
       }
     };
   }, [isRefreshing, dataLoaded]);
-
-  // ============ UTILITY FUNCTIONS ============
 
   const toggleCpuGraphs = () => {
     setShowCpuGraphs(!showCpuGraphs);
@@ -466,7 +429,6 @@ const Dashboard = () => {
     }
   };
 
-  // Calculate average CPU usage from all machines
   const calculateAverageCpu = () => {
     if (summaryData && summaryData.avg_cpu_usage) {
       return `${summaryData.avg_cpu_usage.toFixed(1)}%`;
@@ -484,7 +446,6 @@ const Dashboard = () => {
     return `${avgCpu.toFixed(1)}%`;
   };
 
-  // Calculate average Memory usage
   const calculateAverageMemory = () => {
     if (summaryData && summaryData.avg_memory_usage) {
       return `${summaryData.avg_memory_usage.toFixed(1)}%`;
@@ -502,7 +463,6 @@ const Dashboard = () => {
     return `${avgMemory.toFixed(1)}%`;
   };
 
-  // Get hostname for display (first machine)
   const getDisplayHostname = () => {
     const machines = windowsDetails;
     if (machines.length === 0) return 'No machines';
@@ -511,7 +471,6 @@ const Dashboard = () => {
     return firstMachine.name || 'Unknown';
   };
 
-  // Get IP for display (first machine)
   const getDisplayIp = () => {
     const machines = windowsDetails;
     if (machines.length === 0) return 'N/A';
@@ -520,15 +479,12 @@ const Dashboard = () => {
     return firstMachine.ip_address || 'N/A';
   };
 
-  // Get active device count
   const getActiveDevicesCount = () => {
     if (summaryData) {
       return summaryData.online_machines || 0;
     }
     return windowsDetails.filter(machine => machine.status === 'online').length;
   };
-
-  // ============ MODAL COMPONENT ============
 
   const CreateServerModal = () => {
     if (!showCreateServerModal) return null;
@@ -574,12 +530,9 @@ const Dashboard = () => {
     );
   };
 
-  // ============ CPU MINI GRAPH COMPONENT ============
-
   const MiniCpuGraph = ({ cpuHistory, currentCpu, machineName }) => {
     const history = cpuHistory || [];
     
-    // If no history yet, create a simple array with current value
     const displayHistory = history.length > 0 ? history.slice(-6) : Array(6).fill(currentCpu || 0);
     
     return (
@@ -626,8 +579,6 @@ const Dashboard = () => {
     );
   };
 
-  // ============ CLEANUP ============
-
   useEffect(() => {
     return () => {
       if (refreshTimeoutRef.current) {
@@ -636,8 +587,6 @@ const Dashboard = () => {
       commandTimeoutsRef.current.forEach(timeout => clearTimeout(timeout));
     };
   }, []);
-
-  // ============ RENDER LOGIC ============
 
   const windowsMachinesCount = windowsDetails.length;
   const isRealData = dataLoaded && windowsMachinesCount > 0;
@@ -686,7 +635,6 @@ const Dashboard = () => {
           <div className="left-spacer"></div>
 
           <div className="content-area">
-            {/* System Overview Table */}
             <div className="system-info-card uniform-card">
               <h3 className="section-title">System Overview</h3>
               
@@ -708,7 +656,6 @@ const Dashboard = () => {
                     {windowsMachinesCount} Windows machine(s) connected
                   </div>
                   
-                  {/* System Overview Table */}
                   <div className="table-container">
                     <table className="system-overview-table">
                       <tbody>
@@ -757,7 +704,6 @@ const Dashboard = () => {
 
             {isRealData && (
               <>
-                {/* Three Stats Cards Row - Keep as before */}
                 <div className="stats-layout">
                   <div className="stat-card-small">
                     <div className="stat-card-header">
@@ -832,7 +778,6 @@ const Dashboard = () => {
                   </div>
                 </div>
 
-                {/* Individual CPU Usage History Card - Keep as card */}
                 <div className="cpu-graphs-card uniform-card">
                   <div className="graph-card-header">
                     <h3 className="section-title">CPU Usage History</h3>
@@ -853,10 +798,8 @@ const Dashboard = () => {
                     {!showCpuGraphs ? (
                       <div className="graph-placeholder">
                         <div className="placeholder-content">
-                          <div className="placeholder-icon">📊</div>
                           <h4>CPU Usage Graphs</h4>
                           <p>Click "View CPU Graphs" button to see individual CPU usage history for each machine</p>
-                          <p>Graphs show CPU usage trends over the last 5 minutes</p>
                         </div>
                       </div>
                     ) : (
@@ -910,7 +853,6 @@ const Dashboard = () => {
                   </div>
                 </div>
 
-                {/* Windows Machines Details Table */}
                 <div className="machines-table-card uniform-card">
                   <div className="table-header">
                     <h3 className="section-title">Windows Machines Details</h3>

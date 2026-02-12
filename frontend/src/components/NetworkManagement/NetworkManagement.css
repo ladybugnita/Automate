@@ -413,7 +413,6 @@
         font-size: 1.5em;
     }
 }
-/* Password input container */
 .password-input-container {
   position: relative;
   display: flex;
@@ -440,14 +439,10 @@
 .show-password-toggle:hover {
   color: #3498db;
 }
-
-/* Masked password display */
 .password-masked {
   font-family: monospace;
   letter-spacing: 2px;
 }
-
-/* Form validation */
 .form-group input:invalid {
   border-color: #e74c3c;
 }
@@ -455,8 +450,6 @@
 .form-group input:valid {
   border-color: #27ae60;
 }
-
-/* Device header right section */
 .device-header-right {
   display: flex;
   flex-direction: column;
@@ -474,8 +467,6 @@
   text-transform: uppercase;
   white-space: nowrap;
 }
-
-/* Form spacing adjustments */
 .form-row {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));

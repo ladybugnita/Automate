@@ -2,7 +2,34 @@ import React, { useState, useEffect } from 'react';
 import './MachineManagement.css';
 import axios from 'axios';
 
-const API_BASE_URL = "http://192.168.1.72:5000/api";
+const API_BASE_URL = "http://192.168.1.11:5000/api";
+
+const OS_OPTIONS = {
+  windows: {
+    label: "Windows",
+    subOptions: [
+      "Windows Server 2012 R2",
+      "Windows Server 2016",
+      "Windows Server 2019",
+      "Windows Server 2022",
+      "Windows Server 2025",
+      "Windows 10",
+      "Windows 11"
+    ]
+  },
+  linux: {
+    label: "Linux",
+    subOptions: [
+      "Ubuntu",
+      "Debian",
+      "CentOS",
+      "Red Hat Enterprise Linux",
+      "Fedora",
+      "Amazon Linux",
+      "SUSE Linux"
+    ]
+  }
+};
 
 const MachineManagement = () => {
   const [machineForm, setMachineForm] = useState({
@@ -10,7 +37,9 @@ const MachineManagement = () => {
     ip: '',
     username: '',
     password: '',
-    user: ''
+    user: '',
+    os_type: '',
+    sub_os_type: ''
   });
 
   const [machines, setMachines] = useState([]);
@@ -25,7 +54,10 @@ const MachineManagement = () => {
   const [isAddingMachine, setIsAddingMachine] = useState(false);
   const [isMarkingMachine, setIsMarkingMachine] = useState({});
   const [isUnmarkingMachine, setIsUnmarkingMachine] = useState({});
-  const [apiStatus, setApiStatus] = useState('idle'); 
+  const [apiStatus, setApiStatus] = useState('idle');
+  const [showOsDropdown, setShowOsDropdown] = useState(false);
+  const [showSubOsDropdown, setShowSubOsDropdown] = useState(false);
+  
   const getAuthHeaders = () => {
     const token = localStorage.getItem('token') || '';
     return {
@@ -200,14 +232,50 @@ const MachineManagement = () => {
     }));
   };
 
+  const handleOsTypeSelect = (osType) => {
+    const updatedForm = {
+      ...machineForm,
+      os_type: osType,
+      sub_os_type: '' 
+    };
+    
+    setMachineForm(updatedForm);
+    setShowOsDropdown(false);
+    
+    if (osType) {
+      setTimeout(() => {
+        setShowSubOsDropdown(true);
+      }, 100);
+    }
+  };
+
+  const handleSubOsTypeSelect = (subOsType) => {
+    setMachineForm(prev => ({
+      ...prev,
+      sub_os_type: subOsType
+    }));
+    setShowSubOsDropdown(false);
+  };
+
   const resetForm = () => {
     setMachineForm({
       name: '',
       ip: '',
       username: '',
       password: '',
-      user: ''
+      user: '',
+      os_type: '',
+      sub_os_type: ''
     });
+    setShowOsDropdown(false);
+    setShowSubOsDropdown(false);
+  };
+
+  const getSubOsOptions = () => {
+    if (!machineForm.os_type || !OS_OPTIONS[machineForm.os_type]) {
+      return [];
+    }
+    return OS_OPTIONS[machineForm.os_type].subOptions;
   };
 
   const handleAddMachine = async (e) => {
@@ -226,6 +294,11 @@ const MachineManagement = () => {
     const ipPattern = /^(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/;
     if (!ipPattern.test(machineForm.ip)) {
       alert('Please enter a valid IP address');
+      return;
+    }
+
+    if (machineForm.os_type && !machineForm.sub_os_type) {
+      alert('Please select a specific OS version');
       return;
     }
 
@@ -613,6 +686,73 @@ const MachineManagement = () => {
           </div>
 
           <div className="form-group">
+            <label htmlFor="os_type">OS Type</label>
+            <div className="dropdown-container">
+              <input
+                type="text"
+                id="os_type"
+                name="os_type"
+                value={machineForm.os_type ? OS_OPTIONS[machineForm.os_type]?.label : ''}
+                onClick={() => setShowOsDropdown(!showOsDropdown)}
+                onChange={() => {}} 
+                placeholder="Select OS type"
+                disabled={isAddingMachine || !isApiAvailable || !isAuthenticated}
+                className="os-type-input"
+                readOnly
+              />
+              
+              {showOsDropdown && (
+                <div className="dropdown-menu os-dropdown">
+                  {Object.entries(OS_OPTIONS).map(([key, value]) => (
+                    <div
+                      key={key}
+                      className={`dropdown-item ${machineForm.os_type === key ? 'selected' : ''}`}
+                      onClick={() => handleOsTypeSelect(key)}
+                    >
+                      <span className="os-icon">{key === 'windows' ? '🪟' : '🐧'}</span>
+                      {value.label}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {machineForm.os_type && (
+            <div className="form-group">
+              <label htmlFor="sub_os_type">OS Version {machineForm.os_type ? `(${OS_OPTIONS[machineForm.os_type]?.label})` : ''}</label>
+              <div className="dropdown-container">
+                <input
+                  type="text"
+                  id="sub_os_type"
+                  name="sub_os_type"
+                  value={machineForm.sub_os_type}
+                  onClick={() => setShowSubOsDropdown(!showSubOsDropdown)}
+                  onChange={() => {}} 
+                  placeholder={`Select ${machineForm.os_type} version`}
+                  disabled={isAddingMachine || !isApiAvailable || !isAuthenticated || !machineForm.os_type}
+                  className="sub-os-type-input"
+                  readOnly
+                />
+                
+                {showSubOsDropdown && (
+                  <div className="dropdown-menu sub-os-dropdown">
+                    {getSubOsOptions().map((option) => (
+                      <div
+                        key={option}
+                        className={`dropdown-item ${machineForm.sub_os_type === option ? 'selected' : ''}`}
+                        onClick={() => handleSubOsTypeSelect(option)}
+                      >
+                        {option}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          <div className="form-group">
             <label htmlFor="user">Added By (Optional)</label>
             <input
               type="text"
@@ -709,6 +849,11 @@ const MachineManagement = () => {
                             Available
                           </span>
                         )}
+                        {machine.os_type && (
+                          <span className="status os-type">
+                            {machine.os_type === 'windows' ? '🪟' : '🐧'} {machine.sub_os_type || machine.os_type}
+                          </span>
+                        )}
                       </div>
                     </div>
                     {isMarked && (
@@ -729,6 +874,7 @@ const MachineManagement = () => {
                   <div className="machine-info">
                     <p><strong>IP:</strong> {machine.ip}</p>
                     <p><strong>Username:</strong> {machine.username}</p>
+                    <p><strong>OS:</strong> {machine.os_type ? `${machine.os_type} ${machine.sub_os_type ? `(${machine.sub_os_type})` : ''}` : 'Not specified'}</p>
                     <p><strong>Added By:</strong> {machine.user || 'N/A'}</p>
                     <p><strong>Added On:</strong> {formatDate(machine.created_at)}</p>
                     <p><strong>ID:</strong> {machine.id}</p>

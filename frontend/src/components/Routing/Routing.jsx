@@ -169,11 +169,15 @@ const Routing = () => {
     const password = selectedDeviceData.ssh_password || selectedDeviceData.password || '';
     const username = selectedDeviceData.ssh_username || selectedDeviceData.username || '';
     const ip = selectedDeviceData.ip || selectedDeviceData.device_ip || '';
+    const device_type = selectedDeviceData.device_type || selectedDeviceData.type || 'router';
+    const vendor = selectedDeviceData.vendor || '';
     
     console.log(`Routing: Credentials for selected device:`, {
       ip,
       username,
-      password: password ? '***HIDDEN***' : 'NOT FOUND'
+      password: password ? '***HIDDEN***' : 'NOT FOUND',
+      device_type,
+      vendor
     });
     
     if (!password) {
@@ -197,7 +201,9 @@ const Routing = () => {
     return {
       ip: ip,
       username: username,
-      password: password
+      password: password,
+      device_type: device_type,
+      vendor: vendor
     };
   }, [selectedDeviceData]);
 
@@ -221,6 +227,8 @@ const Routing = () => {
     const password = deviceToCheck.ssh_password || deviceToCheck.password || '';
     const username = deviceToCheck.ssh_username || deviceToCheck.username || '';
     const ip = deviceToCheck.ip || deviceToCheck.device_ip || '';
+    const device_type = deviceToCheck.device_type || deviceToCheck.type || 'router';
+    const vendor = deviceToCheck.vendor || '';
     
     if (!ip || !username || !password) {
       console.error('Routing: Incomplete device data for status check');
@@ -232,7 +240,9 @@ const Routing = () => {
     const deviceInfo = {
       ip: ip,
       username: username,
-      password: password
+      password: password,
+      device_type: device_type,
+      vendor: vendor
     };
     
     const payload = {
@@ -1316,6 +1326,12 @@ const Routing = () => {
                           <span className="detail-label">Device Type:</span>
                           <span className="detail-value">
                             {selectedDeviceData.device_type || 'router'}
+                          </span>
+                        </div>
+                        <div className="device-detail-item">
+                          <span className="detail-label">Vendor:</span>
+                          <span className="detail-value">
+                            {selectedDeviceData.vendor || 'Unknown'}
                           </span>
                         </div>
                         <div className="device-detail-item">

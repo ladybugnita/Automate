@@ -55,7 +55,6 @@ function DNSConfiguration() {
     targetMachine: 'primary'
   });
 
-  // Refs for managing state and preventing duplicate commands
   const initialCheckDone = useRef(false);
   const listenerAdded = useRef(false);
   const dnsMachinesRef = useRef([]);
@@ -82,12 +81,11 @@ function DNSConfiguration() {
   const mountedRef = useRef(false);
   const machineInfoListenerRef = useRef(false);
   
-  // NEW: Command flow management refs
   const commandInProgressRef = useRef(false);
   const pendingCommandsRef = useRef([]);
   const lastDNSCheckTimeRef = useRef(0);
   const lastDNSInstallTimeRef = useRef(0);
-  const commandCooldownTime = 1000; // 1 second cooldown between same commands
+  const commandCooldownTime = 1000; 
 
   const navItems = [
     'Dashboard', 'DNS Configuration', 'Event Viewer', 'DHCP', 'Users', 
@@ -95,7 +93,6 @@ function DNSConfiguration() {
     'Active Directory', 'Routing'
   ];
 
-  // Get the API base URL dynamically - memoized to prevent recreation
   const API_BASE_URL = useMemo(() => {
     if (typeof window !== 'undefined') {
       const currentHost = window.location.hostname;
@@ -110,17 +107,10 @@ function DNSConfiguration() {
     return 'http://localhost:5000';
   }, []);
 
-  // ============ COMMAND FLOW MANAGEMENT ============
-  
-  /**
-   * Send a command with deduplication and cooldown
-   * Prevents sending the same command multiple times in quick succession
-   */
   const sendCommandWithFlow = useCallback((command, payload = null) => {
     const now = Date.now();
     
-    // Check if this command was sent recently
-    if (command === 'check_dns_role_installed_windows_ansible') {
+    if (command === 'check_dns_role_installed_server_ansible') {
       const timeSinceLastCheck = now - lastDNSCheckTimeRef.current;
       if (timeSinceLastCheck < commandCooldownTime) {
         console.log(`DNS Configuration: Skipping duplicate ${command} command (cooldown: ${commandCooldownTime - timeSinceLastCheck}ms remaining)`);
@@ -129,7 +119,7 @@ function DNSConfiguration() {
       lastDNSCheckTimeRef.current = now;
     }
     
-    if (command === 'install_dns_role_windows_ansible') {
+    if (command === 'install_dns_role_server_ansible') {
       const timeSinceLastInstall = now - lastDNSInstallTimeRef.current;
       if (timeSinceLastInstall < commandCooldownTime) {
         console.log(`DNS Configuration: Skipping duplicate ${command} command (cooldown: ${commandCooldownTime - timeSinceLastInstall}ms remaining)`);
@@ -138,37 +128,29 @@ function DNSConfiguration() {
       lastDNSInstallTimeRef.current = now;
     }
     
-    // Check if a command is already in progress
     if (commandInProgressRef.current) {
       console.log(`DNS Configuration: Command ${command} is already in progress, queueing...`);
       pendingCommandsRef.current.push({ command, payload });
       return;
     }
     
-    // Mark command as in progress
     commandInProgressRef.current = true;
     
     console.log(`DNS Configuration: SENDING COMMAND: ${command}`, payload ? 'with payload' : 'no payload');
     
-    // Send the command
     sendCommand(command, payload);
     
-    // Set a timeout to clear the in-progress flag
     setTimeout(() => {
       commandInProgressRef.current = false;
       
-      // Process any pending commands
       if (pendingCommandsRef.current.length > 0) {
         const nextCommand = pendingCommandsRef.current.shift();
         console.log(`DNS Configuration: Processing queued command: ${nextCommand.command}`);
         sendCommandWithFlow(nextCommand.command, nextCommand.payload);
       }
-    }, 500); // Small delay to prevent rapid-fire commands
+    }, 500); 
   }, [sendCommand]);
 
-  /**
-   * Process the next command in the queue
-   */
   const processNextCommand = useCallback(() => {
     if (pendingCommandsRef.current.length > 0 && !commandInProgressRef.current) {
       const nextCommand = pendingCommandsRef.current.shift();
@@ -176,8 +158,6 @@ function DNSConfiguration() {
       sendCommandWithFlow(nextCommand.command, nextCommand.payload);
     }
   }, [sendCommandWithFlow]);
-
-  // ============ UTILITY FUNCTIONS ============
 
   const getTotalZonesCount = () => {
     return (zones.primary.forward.length + zones.primary.reverse.length + 
@@ -224,17 +204,14 @@ function DNSConfiguration() {
     return responseData;
   };
 
-  // ============ MACHINE MANAGEMENT ============
-
-  const getWindowsInfoForMachine = (machine) => {
+  const getServerInfoForMachine = (machine) => {
     if (!machine) {
-      console.error('DNS Configuration: No machine provided to getWindowsInfoForMachine');
+      console.error('DNS Configuration: No machine provided to getServerInfoForMachine');
       return null;
     }
     
-    console.log(`DNS Configuration: Getting Windows info for machine: ${machine.name || 'Unknown'} (${machine.ip})`);
+    console.log(`DNS Configuration: Getting server info for machine: ${machine.name || 'Unknown'} (${machine.ip})`);
     
-    // Check for password in different possible fields
     const password = machine.password || machine.password_provided || '';
     
     console.log(`DNS Configuration: Password for machine ${machine.name || machine.ip}:`, password ? '***HIDDEN***' : 'NOT FOUND');
@@ -248,7 +225,9 @@ function DNSConfiguration() {
     return {
       ip: machine.ip,
       username: machine.username || machine.username_provided || 'admin',
-      password: password
+      password: password,
+      os_type: machine.os_type || '',
+      sub_os_type: machine.sub_os_type || ''
     };
   };
 
@@ -269,7 +248,6 @@ function DNSConfiguration() {
         throw new Error('No authentication token found');
       }
       
-      // Try with include_password=true parameter
       console.log('DNS Configuration: Trying to fetch machines WITH passwords...');
       
       const response = await fetch(`${API_BASE_URL}/api/machines/get-machines?include_password=true`, {
@@ -283,7 +261,6 @@ function DNSConfiguration() {
       if (!response.ok) {
         console.log('DNS Configuration: Endpoint with password parameter failed, trying without parameter...');
         
-        // Try without parameter
         const response2 = await fetch(`${API_BASE_URL}/api/machines/get-machines`, {
           method: 'GET',
           headers: {
@@ -313,7 +290,6 @@ function DNSConfiguration() {
         setMachinesLoading(false);
       }
       
-      // Fallback to WebSocket only if component is still mounted
       if (mountedRef.current && isConnected) {
         console.log('DNS Configuration: Falling back to WebSocket for get_machine_info');
         sendCommandWithFlow('get_machine_info', {});
@@ -323,7 +299,6 @@ function DNSConfiguration() {
     }
     
     async function processMachineData(data) {
-      // Process the data - adjust based on your API response structure
       let machines = [];
       if (data.machines && Array.isArray(data.machines)) {
         machines = data.machines;
@@ -335,7 +310,6 @@ function DNSConfiguration() {
       
       console.log('DNS Configuration: Total machines found:', machines.length);
       
-      // Filter for DNS machines
       const dnsMachinesList = machines.filter(machine => {
         const hasMarks = machine.marked_as && 
                        Array.isArray(machine.marked_as) && 
@@ -346,6 +320,8 @@ function DNSConfiguration() {
             id: machine.id,
             hasPassword: !!(machine.password || machine.password_provided),
             hasUsername: !!(machine.username || machine.username_provided),
+            os_type: machine.os_type,
+            sub_os_type: machine.sub_os_type,
             marks: machine.marked_as
           });
         }
@@ -365,7 +341,6 @@ function DNSConfiguration() {
         return;
       }
       
-      // Check if passwords are available
       const machinesWithPasswords = dnsMachinesList.filter(machine => {
         const hasPassword = machine.password || machine.password_provided;
         if (!hasPassword) {
@@ -388,7 +363,6 @@ function DNSConfiguration() {
       dnsMachinesRef.current = dnsMachinesList;
       setMachinesLoading(false);
       
-      // Check DNS status on these machines (using command flow)
       checkDNSOnMachines(dnsMachinesList);
     }
   }, [API_BASE_URL, isConnected, sendCommandWithFlow]);
@@ -408,21 +382,19 @@ function DNSConfiguration() {
       return null;
     }
     
-    const windowsInfo = getWindowsInfoForMachine(machine);
-    if (!windowsInfo) {
-      console.error(`DNS Configuration: Failed to get Windows info for ${targetMachine} machine:`, machine.name);
+    const serverInfo = getServerInfoForMachine(machine);
+    if (!serverInfo) {
+      console.error(`DNS Configuration: Failed to get server info for ${targetMachine} machine:`, machine.name);
       return null;
     }
     
     console.log(`DNS Configuration: Creating payload for ${targetMachine} machine:`, machine.name);
     
     return {
-      windows_info: windowsInfo,
+      server_info: serverInfo,
       ...additionalData
     };
   };
-
-  // ============ ZONE AND RECORD MANAGEMENT ============
 
   const normalizeZoneName = (zoneName) => {
     if (!zoneName) return '';
@@ -700,27 +672,24 @@ function DNSConfiguration() {
     setError(null);
     setZonesLoading({ primary: !!primaryMachine, secondary: !!secondaryMachine });
     
-    // Send separate commands for each machine
     const sendCommandForMachine = (machine, machineType) => {
       const payload = {
-        windows_info: getWindowsInfoForMachine(machine)
+        server_info: getServerInfoForMachine(machine)
       };
       
-      if (!payload.windows_info) {
+      if (!payload.server_info) {
         console.error(`DNS Configuration: Failed to create payload for ${machineType}`);
         return;
       }
       
-      console.log(`DNS Configuration: Sending get_dns_details for ${machineType}: ${machine.ip}`);
-      sendCommandWithFlow('get_dns_details_windows_ansible', payload);
+      console.log(`DNS Configuration: Sending get_dns_details_server_ansible for ${machineType}: ${machine.ip}`);
+      sendCommandWithFlow('get_dns_details_server_ansible', payload);
     };
     
-    // Send command for primary if exists
     if (primaryMachine) {
       sendCommandForMachine(primaryMachine, 'primary');
     }
     
-    // Send command for secondary if exists (with delay to avoid command collision)
     if (secondaryMachine) {
       setTimeout(() => {
         sendCommandForMachine(secondaryMachine, 'secondary');
@@ -741,7 +710,7 @@ function DNSConfiguration() {
         pendingRefreshRef.current = false;
         if (resolve) resolve(false);
       }
-    }, 10000); // Increased timeout for multiple machines
+    }, 10000); 
   }, [isConnected, sendCommandWithFlow]);
 
   const refreshDNSData = () => {
@@ -763,26 +732,17 @@ function DNSConfiguration() {
       refreshTimeoutRef.current = null;
     }
     
-    // REMOVED: The old logic checking for primary_dns_details or secondary_dns_details
-    // Now we process the response data directly based on the machine type
-    
-    // Determine machine type from response or use provided parameter
     let targetMachineType = machineType;
     
-    // If no machine type provided, try to determine it
     if (!targetMachineType) {
-      // Check if we can determine machine type from payload or response
       const primaryMachine = getMachineByType('primary');
       const secondaryMachine = getMachineByType('secondary');
       
-      // If we have both machines, we need to track which response is for which machine
-      // This is a limitation - we may need backend to include machine identification
       if (primaryMachine && !secondaryMachine) {
         targetMachineType = 'primary';
       } else if (!primaryMachine && secondaryMachine) {
         targetMachineType = 'secondary';
       } else {
-        // Default to primary if we can't determine
         targetMachineType = 'primary';
         console.log('DNS Configuration: Could not determine machine type, defaulting to primary');
       }
@@ -790,7 +750,6 @@ function DNSConfiguration() {
     
     console.log(`DNS Configuration: Processing DNS details for machine: ${targetMachineType}`);
     
-    // Process the response data directly (not nested in primary_dns_details or secondary_dns_details)
     const details = responseData.dns_details || responseData;
     const processedZones = processZonesFromDetails(details, targetMachineType);
     
@@ -839,7 +798,6 @@ function DNSConfiguration() {
       }, 300);
     }
     
-    // Check newly created records against this response
     const updateData = {
       [targetMachineType]: { details: details, zones: processedZones }
     };
@@ -859,7 +817,6 @@ function DNSConfiguration() {
       const normalizedZoneName = normalizeZoneName(name);
       let found = false;
       
-      // Check if zone exists in the updates
       if (updates && updates[machineType]) {
         const machineUpdates = updates[machineType];
         if (machineUpdates.zones) {
@@ -961,8 +918,6 @@ function DNSConfiguration() {
     }
   }, [newlyCreatedRecords]);
 
-  // ============ COMMAND HANDLERS ============
-
   const handleWebSocketMessage = useCallback((message) => {
     console.log('DNS Configuration: received WebSocket message:', message);
     
@@ -1019,7 +974,6 @@ function DNSConfiguration() {
     switch(command) {
       case 'get_machine_info':
         console.log('DNS Configuration: Received machine info via WebSocket fallback');
-        // Process machine info from WebSocket fallback
         if (responseData && responseData.machines && Array.isArray(responseData.machines)) {
           const dnsMachinesList = responseData.machines.filter(machine => {
             return machine.marked_as && Array.isArray(machine.marked_as) && 
@@ -1047,26 +1001,24 @@ function DNSConfiguration() {
         processNextCommand();
         break;
         
-      case 'check_dns_role_installed_windows_ansible':
+      case 'check_dns_role_installed_server_ansible':
         console.log('DNS Configuration: Received DNS check response');
         handleDNSCheckResponse(responseData);
         commandInProgressRef.current = false;
         processNextCommand();
         break;
         
-      case 'get_dns_details_windows_ansible':
+      case 'get_dns_details_server_ansible':
         console.log('DNS Configuration: Received DNS details response');
         if (responseData) {
-          // Try to determine which machine this response is for based on payload
           let machineType = null;
-          if (payload && payload.windows_info) {
-            // Check if this matches any of our configured machines
+          if (payload && payload.server_info) {
             const primaryMachine = getMachineByType('primary');
             const secondaryMachine = getMachineByType('secondary');
             
-            if (primaryMachine && payload.windows_info.ip === primaryMachine.ip) {
+            if (primaryMachine && payload.server_info.ip === primaryMachine.ip) {
               machineType = 'primary';
-            } else if (secondaryMachine && payload.windows_info.ip === secondaryMachine.ip) {
+            } else if (secondaryMachine && payload.server_info.ip === secondaryMachine.ip) {
               machineType = 'secondary';
             }
           }
@@ -1083,23 +1035,23 @@ function DNSConfiguration() {
         processNextCommand();
         break;
         
-      case 'install_dns_role_windows_ansible':
+      case 'install_dns_role_server_ansible':
         console.log('DNS Configuration: Received DNS installation response');
         handleDNSInstallResponse(responseData);
         commandInProgressRef.current = false;
         processNextCommand();
         break;
         
-      case 'create_zone_forward_lookup_zone_dns_windows_ansible':
-      case 'create_zone_reverse_lookup_zone_dns_windows_ansible':
+      case 'create_zone_forward_lookup_zone_dns_server_ansible':
+      case 'create_zone_reverse_lookup_zone_dns_server_ansible':
         console.log('DNS Configuration: Received zone creation response');
         handleZoneCreationResponse(responseData);
         commandInProgressRef.current = false;
         processNextCommand();
         break;
         
-      case 'create_host_record_forward_lookup_zone_dns_windows_ansible':
-      case 'create_pointer_record_reverse_lookup_zone_dns_windows_ansible':
+      case 'create_host_record_forward_lookup_zone_dns_server_ansible':
+      case 'create_pointer_record_reverse_lookup_zone_dns_server_ansible':
         console.log('DNS Configuration: Received record creation response');
         handleRecordCreationResponse(responseData);
         commandInProgressRef.current = false;
@@ -1133,7 +1085,6 @@ function DNSConfiguration() {
     
     const newDnsRoleInstalled = { ...dnsRoleInstalled };
     
-    // Check installation status from response
     let isInstalled = false;
 
     if (responseData.requires_installation === false){
@@ -1165,15 +1116,11 @@ function DNSConfiguration() {
                    responseData.success === true;
     }
     
-    // Try to determine which machine this response is for
-    // This is a limitation - we can't know which machine responded
-    // For now, update primary if we have one
     const primaryMachine = getMachineByType('primary');
     if (primaryMachine) {
       newDnsRoleInstalled.primary = isInstalled;
     }
     
-    // Update secondary if we have one and response indicates it
     const secondaryMachine = getMachineByType('secondary');
     if (secondaryMachine && responseData.secondary_installed !== undefined) {
       newDnsRoleInstalled.secondary = responseData.secondary_installed === true || 
@@ -1186,13 +1133,11 @@ function DNSConfiguration() {
     setLoading(false);
     setCheckingStatus(false);
     
-    // Check if installation is required
     const requiresInstallation = responseData.requires_installation === true || 
                                  responseData.requires_installation === "true";
     
     console.log('DNS Configuration: Requires installation:', requiresInstallation);
     
-    // Check if we have any installed DNS servers
     const hasInstalledPrimary = newDnsRoleInstalled.primary === true;
     const hasInstalledSecondary = newDnsRoleInstalled.secondary === true;
     const hasInstalledAny = hasInstalledPrimary || hasInstalledSecondary;
@@ -1207,7 +1152,6 @@ function DNSConfiguration() {
       updateInstallationStatus('dns', INSTALLATION_STATUS.INSTALLED, 100, 'DNS server is installed');
       setShowInstallModal(false);
       
-      // Check if we have zones data already
       const hasZonesPrimary = zones.primary.forward.length > 0 || zones.primary.reverse.length > 0;
       const hasZonesSecondary = zones.secondary.forward.length > 0 || zones.secondary.reverse.length > 0;
       const hasZonesAny = hasZonesPrimary || hasZonesSecondary;
@@ -1223,25 +1167,20 @@ function DNSConfiguration() {
       }
     } else {
       console.log('DNS Configuration: No DNS installed and no installation required - showing DNS not installed UI');
-      // This will trigger the "DNS Server Role Not Installed" UI in renderDNSRoleStatus
     }
   };
 
-  // ============ FIXED handleDNSInstallResponse FUNCTION ============
   const handleDNSInstallResponse = (responseData) => {
     console.log('DNS Configuration: Processing DNS installation response:', responseData);
     
-    // ALWAYS log the full response for debugging
     console.log('DNS Configuration: Full installation response:', JSON.stringify(responseData));
     
-    // Determine if installation was successful
     let isSuccessful = false;
     
     if (!responseData) {
       console.log('DNS Configuration: No response data');
       isSuccessful = false;
     } else if (typeof responseData === 'string') {
-      // Handle string response (like "dns role installation done")
       const lowerResponse = responseData.toLowerCase();
       if (lowerResponse.includes('dns role installation done') ||
           lowerResponse.includes('installation completed') ||
@@ -1266,13 +1205,11 @@ function DNSConfiguration() {
     if (isSuccessful) {
       console.log('DNS Configuration: Installation SUCCESSFUL!');
       
-      // Update DNS role state
       const primaryMachine = getMachineByType('primary');
       const secondaryMachine = getMachineByType('secondary');
       
       const newDnsRoleInstalled = { ...dnsRoleInstalled };
       
-      // Determine which machines to mark as installed
       if (primaryMachine) {
         newDnsRoleInstalled.primary = true;
         console.log('DNS Configuration: Marking primary as installed');
@@ -1286,22 +1223,18 @@ function DNSConfiguration() {
       console.log('DNS Configuration: Updated DNS role state:', newDnsRoleInstalled);
       setDnsRoleInstalled(newDnsRoleInstalled);
       
-      // Update installation status
       updateInstallationStatus('dns', INSTALLATION_STATUS.INSTALLED, 100, 'DNS server installed successfully');
       
-      // Update UI
       setInstallSuccess(true);
       setInstallProgress('Installation completed successfully!');
       setInstalling(false);
-      setError(null); // CRITICAL: Clear any error message
+      setError(null); 
       
-      // Close modal and fetch details
       setTimeout(() => {
         setShowInstallModal(false);
         setInstallSuccess(false);
         setInstallProgress('');
         
-        // Give a moment then fetch DNS details
         setTimeout(() => {
           console.log('DNS Configuration: Now fetching DNS details...');
           fetchDNSDetails();
@@ -1311,11 +1244,9 @@ function DNSConfiguration() {
     } else {
       console.log('DNS Configuration: Installation FAILED or response not recognized');
       
-      // Double-check: maybe it's a success format we didn't recognize
       if (responseData && (responseData.success === true || responseData.requires_installation === false)) {
         console.log('DNS Configuration: Actually, re-checking shows it IS a success!');
         
-        // Update state anyway
         const primaryMachine = getMachineByType('primary');
         const newDnsRoleInstalled = { ...dnsRoleInstalled };
         if (primaryMachine) newDnsRoleInstalled.primary = true;
@@ -1338,7 +1269,6 @@ function DNSConfiguration() {
         }, 1200);
         
       } else {
-        // Real failure
         console.log('DNS Configuration: Setting error message');
         const errorMsg = typeof responseData === 'string' ? responseData : JSON.stringify(responseData);
         setError(`Installation failed: ${errorMsg}`);
@@ -1348,7 +1278,6 @@ function DNSConfiguration() {
       }
     }
     
-    // Reset action in progress
     actionInProgressRef.current = false;
   };
 
@@ -1544,8 +1473,6 @@ function DNSConfiguration() {
     }
   };
 
-  // ============ DNS OPERATIONS ============
-
   const fetchDNSDetails = () => {
     if (!isConnected) {
       setError('WebSocket not connected');
@@ -1563,27 +1490,24 @@ function DNSConfiguration() {
     setZonesLoading({ primary: !!primaryMachine, secondary: !!secondaryMachine });
     setError(null);
     
-    // Send separate commands for each machine
     const sendCommandForMachine = (machine, machineType) => {
       const payload = {
-        windows_info: getWindowsInfoForMachine(machine)
+        server_info: getServerInfoForMachine(machine)
       };
       
-      if (!payload.windows_info) {
+      if (!payload.server_info) {
         console.error(`DNS Configuration: Failed to create payload for ${machineType}`);
         return;
       }
       
-      console.log(`DNS Configuration: SENDING COMMAND: get_dns_details_windows_ansible for ${machineType}`);
-      sendCommandWithFlow('get_dns_details_windows_ansible', payload);
+      console.log(`DNS Configuration: SENDING COMMAND: get_dns_details_server_ansible for ${machineType}`);
+      sendCommandWithFlow('get_dns_details_server_ansible', payload);
     };
     
-    // Send command for primary if exists
     if (primaryMachine) {
       sendCommandForMachine(primaryMachine, 'primary');
     }
     
-    // Send command for secondary if exists (with delay to avoid command collision)
     if (secondaryMachine) {
       setTimeout(() => {
         sendCommandForMachine(secondaryMachine, 'secondary');
@@ -1612,27 +1536,24 @@ function DNSConfiguration() {
     
     updateInstallationStatus('dns', INSTALLATION_STATUS.INSTALLING, 0, 'Starting DNS installation...');
     
-    // Send separate installation commands for each machine
     const sendInstallCommandForMachine = (machine, machineType) => {
       const payload = {
-        windows_info: getWindowsInfoForMachine(machine)
+        server_info: getServerInfoForMachine(machine)
       };
       
-      if (!payload.windows_info) {
+      if (!payload.server_info) {
         console.error(`DNS Configuration: Failed to create payload for ${machineType} installation`);
         return;
       }
       
-      console.log(`DNS Configuration: SENDING COMMAND: install_dns_role_windows_ansible for ${machineType}`);
-      sendCommandWithFlow('install_dns_role_windows_ansible', payload);
+      console.log(`DNS Configuration: SENDING COMMAND: install_dns_role_server_ansible for ${machineType}`);
+      sendCommandWithFlow('install_dns_role_server_ansible', payload);
     };
     
-    // Install on primary first
     if (primaryMachine) {
       sendInstallCommandForMachine(primaryMachine, 'primary');
     }
     
-    // Install on secondary after a delay (if exists)
     if (secondaryMachine) {
       setTimeout(() => {
         sendInstallCommandForMachine(secondaryMachine, 'secondary');
@@ -1659,10 +1580,10 @@ function DNSConfiguration() {
     let command, additionalData;
     
     if (newZoneData.zoneType === 'forward') {
-      command = 'create_zone_forward_lookup_zone_dns_windows_ansible';
+      command = 'create_zone_forward_lookup_zone_dns_server_ansible';
       additionalData = { zone_name: newZoneData.zoneName };
     } else {
-      command = 'create_zone_reverse_lookup_zone_dns_windows_ansible';
+      command = 'create_zone_reverse_lookup_zone_dns_server_ansible';
       const ipParts = newZoneData.zoneName.split('.').reverse();
       additionalData = { zone_name: `${ipParts.slice(0, 3).join('.')}.in-addr.arpa` };
     }
@@ -1719,21 +1640,21 @@ function DNSConfiguration() {
     let command, additionalData;
     
     if (newRecordData.recordType === 'A' || newRecordData.recordType === 'CNAME') {
-      command = 'create_host_record_forward_lookup_zone_dns_windows_ansible';
+      command = 'create_host_record_forward_lookup_zone_dns_server_ansible';
       additionalData = {
         zone_name: selectedZone.zone,
         record_name: newRecordData.recordName,
         record_ip: newRecordData.recordValue
       };
     } else if (newRecordData.recordType === 'PTR') {
-      command = 'create_pointer_record_reverse_lookup_zone_dns_windows_ansible';
+      command = 'create_pointer_record_reverse_lookup_zone_dns_server_ansible';
       additionalData = {
         zone_name: selectedZone.zone,
         host_ip: newRecordData.recordIp,
         host_name: newRecordData.recordValue
       };
     } else if (newRecordData.recordType === 'MX' || newRecordData.recordType === 'TXT') {
-      command = 'create_host_record_forward_lookup_zone_dns_windows_ansible';
+      command = 'create_host_record_forward_lookup_zone_dns_server_ansible';
       additionalData = {
         zone_name: selectedZone.zone,
         record_name: newRecordData.recordName || 'default',
@@ -1783,8 +1704,6 @@ function DNSConfiguration() {
     sendCommandWithFlow(command, payload);
   };
 
-  // ============ DNS CHECK FUNCTION ============
-
   const checkDNSOnMachines = (machinesList = dnsMachinesRef.current) => {
     const primaryMachine = getMachineByType('primary');
     const secondaryMachine = getMachineByType('secondary');
@@ -1796,35 +1715,30 @@ function DNSConfiguration() {
       return;
     }
     
-    // Send separate check commands for each machine
     const sendCheckCommandForMachine = (machine, machineType) => {
       const payload = {
-        windows_info: getWindowsInfoForMachine(machine)
+        server_info: getServerInfoForMachine(machine)
       };
       
-      if (!payload.windows_info) {
+      if (!payload.server_info) {
         console.error(`DNS Configuration: Failed to create payload for ${machineType} check`);
         return;
       }
       
-      console.log(`DNS Configuration: SENDING COMMAND: check_dns_role_installed_windows_ansible for ${machineType}`);
-      sendCommandWithFlow('check_dns_role_installed_windows_ansible', payload);
+      console.log(`DNS Configuration: SENDING COMMAND: check_dns_role_installed_server_ansible for ${machineType}`);
+      sendCommandWithFlow('check_dns_role_installed_server_ansible', payload);
     };
     
-    // Check primary first
     if (primaryMachine) {
       sendCheckCommandForMachine(primaryMachine, 'primary');
     }
     
-    // Check secondary after a delay (if exists)
     if (secondaryMachine) {
       setTimeout(() => {
         sendCheckCommandForMachine(secondaryMachine, 'secondary');
       }, 1000);
     }
   };
-
-  // ============ RENDER FUNCTIONS ============
 
   const getAllZones = useCallback(() => {
     const allZones = [];
@@ -2419,13 +2333,10 @@ function DNSConfiguration() {
     );
   };
 
-  // ============ USE EFFECTS ============
-
   useEffect(() => {
     console.log('DNS Configuration Component Mounted');
     mountedRef.current = true;
     
-    // Fetch machines immediately on mount
     fetchMachineInfo();
     
     return () => {
@@ -2467,8 +2378,6 @@ function DNSConfiguration() {
       checkDNSOnMachines();
     }
   }, [dnsMachines, machinesLoading]);
-
-  // ============ RENDER COMPONENT ============
 
   return (
     <div className="dns-configuration">
@@ -2706,7 +2615,7 @@ function DNSConfiguration() {
                   <div className="warning-box">
                     <h4>⚠️ Important Information</h4>
                     <ul>
-                      <li>This will install Windows DNS Server role via Ansible on all configured DNS machines</li>
+                      <li>This will install DNS Server role via Ansible on all configured DNS machines</li>
                       <li>System restart may be required</li>
                       <li>Ensure you have administrator privileges</li>
                       <li>Installation may take several minutes (NO TIMEOUT)</li>

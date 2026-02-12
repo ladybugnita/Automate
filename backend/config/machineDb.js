@@ -9,6 +9,8 @@ class MachineDB {
                 name: machineData.name,
                 ip: machineData.ip,
                 username: machineData.username,
+                os_type: machineData.os_type,
+                sub_os_type: machineData.sub_os_type,
                 marked_as: machineData.marked_as
             });
 
@@ -37,13 +39,15 @@ class MachineDB {
             const username = machineData.username || 'Administrator';
             const password = machineData.password || '';
             const user = machineData.user || 'Unknown';
+            const os_type = machineData.os_type || null;
+            const sub_os_type = machineData.sub_os_type || null;
             
             const markedAs = machineData.marked_as ? JSON.stringify(machineData.marked_as) : null;
 
             const sql = `
                 INSERT INTO machine_info 
-                (user_id, name, ip, username, password, user, marked_as, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`;
+                (user_id, name, ip, username, password, user, os_type, sub_os_type, marked_as, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`;
             
             const values = [
                 userId,
@@ -52,6 +56,8 @@ class MachineDB {
                 username,
                 password,
                 user,
+                os_type,
+                sub_os_type,
                 markedAs
             ];
             
@@ -62,6 +68,8 @@ class MachineDB {
                 username,
                 '***PASSWORD***',
                 user,
+                os_type,
+                sub_os_type,
                 markedAs ? '***MARKED_AS***' : null
             ]);
             
@@ -78,6 +86,8 @@ class MachineDB {
                     username,
                     password,
                     user,
+                    os_type,
+                    sub_os_type,
                     marked_as,
                     created_at,
                     updated_at
@@ -105,6 +115,8 @@ class MachineDB {
                     username: savedMachine.username,
                     password: savedMachine.password,
                     user: savedMachine.user,
+                    os_type: savedMachine.os_type,
+                    sub_os_type: savedMachine.sub_os_type,
                     marked_as: parsedMarkedAs,
                     created_at: savedMachine.created_at,
                     updated_at: savedMachine.updated_at,
@@ -159,8 +171,8 @@ class MachineDB {
     static async getMachines(userId, includePassword = false) {
         try {
             const selectFields = includePassword 
-                ? `id, user_id, name, ip, username, password, user, marked_as, created_at, updated_at`
-                : `id, user_id, name, ip, username, user, marked_as, created_at, updated_at`;
+                ? `id, user_id, name, ip, username, password, user, os_type, sub_os_type, marked_as, created_at, updated_at`
+                : `id, user_id, name, ip, username, user, os_type, sub_os_type, marked_as, created_at, updated_at`;
             
             const sql = `
                 SELECT ${selectFields}
@@ -183,6 +195,8 @@ class MachineDB {
                     ip: row.ip,
                     username: row.username || 'Administrator',
                     user: row.user || 'Unknown',
+                    os_type: row.os_type,
+                    sub_os_type: row.sub_os_type,
                     marked_as: parsedMarkedAs,  
                     created_at: row.created_at,
                     updated_at: row.updated_at
@@ -217,8 +231,8 @@ class MachineDB {
     static async getMachineById(machineId, userId = null, includePassword = false) {
         try {
             const selectFields = includePassword 
-                ? `id, user_id, name, ip, username, password, user, marked_as, created_at, updated_at`
-                : `id, user_id, name, ip, username, user, marked_as, created_at, updated_at`;
+                ? `id, user_id, name, ip, username, password, user, os_type, sub_os_type, marked_as, created_at, updated_at`
+                : `id, user_id, name, ip, username, user, os_type, sub_os_type, marked_as, created_at, updated_at`;
             
             let sql = `SELECT ${selectFields} FROM machine_info WHERE id = ?`;
             const params = [machineId];
@@ -249,6 +263,8 @@ class MachineDB {
                 ip: row.ip,
                 username: row.username || 'Administrator',
                 user: row.user || 'Unknown',
+                os_type: row.os_type,
+                sub_os_type: row.sub_os_type,
                 marked_as: parsedMarkedAs,  
                 created_at: row.created_at,
                 updated_at: row.updated_at
@@ -284,6 +300,8 @@ class MachineDB {
                 updateData: {
                     ...updateData,
                     password: updateData.password ? '***' : 'not provided',
+                    os_type: updateData.os_type || 'not provided',
+                    sub_os_type: updateData.sub_os_type || 'not provided',
                     marked_as: updateData.marked_as ? '***MARKED_AS***' : 'not provided'
                 }
             });
@@ -314,6 +332,16 @@ class MachineDB {
             if (updateData.user !== undefined) {
                 fields.push('user = ?');
                 values.push(updateData.user);
+            }
+            
+            if (updateData.os_type !== undefined) {
+                fields.push('os_type = ?');
+                values.push(updateData.os_type);
+            }
+            
+            if (updateData.sub_os_type !== undefined) {
+                fields.push('sub_os_type = ?');
+                values.push(updateData.sub_os_type);
             }
             
             if (updateData.marked_as !== undefined) {
@@ -539,6 +567,8 @@ class MachineDB {
                     id: markedMachines[0].id,
                     name: markedMachines[0].name,
                     ip: markedMachines[0].ip,
+                    os_type: markedMachines[0].os_type,
+                    sub_os_type: markedMachines[0].sub_os_type,
                     hasPassword: includePassword ? !!(markedMachines[0].password) : 'not requested',
                     marked_as: markedMachines[0].marked_as
                 });
@@ -597,7 +627,6 @@ class MachineDB {
                 withPasswords: machinesWithPasswords.length,
                 withoutPasswords: machinesWithoutPasswords.length
             };
-            
         } catch (error) {
             console.error('Error getting machines for Event Viewer:', error.message);
             console.error('Error stack:', error.stack);

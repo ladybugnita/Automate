@@ -44,6 +44,8 @@ router.post('/add-machine', verifyToken, async (req, res) => {
             username = 'Administrator',
             password, 
             user = 'Unknown',
+            os_type = null,
+            sub_os_type = null,
             marked_as = []
         } = req.body;
 
@@ -54,6 +56,8 @@ router.post('/add-machine', verifyToken, async (req, res) => {
             ip,
             username_provided: username,
             password_length: password ? password.length : 0,
+            os_type,
+            sub_os_type,
             marked_as
         });
 
@@ -64,12 +68,25 @@ router.post('/add-machine', verifyToken, async (req, res) => {
             });
         }
 
+        let finalOsType = os_type;
+        let finalSubOsType = sub_os_type;
+        
+        if (os_type && !sub_os_type) {
+            if (os_type === 'windows') {
+                finalSubOsType = 'Windows Server 2022'; 
+            } else if (os_type === 'linux') {
+                finalSubOsType = 'Ubuntu'; 
+            }
+        }
+
         const result = await MachineDB.addMachine({
             name,
             ip,
             username,
             password,
             user,
+            os_type: finalOsType,
+            sub_os_type: finalSubOsType,
             marked_as
         }, req.user.id);
 
@@ -110,7 +127,7 @@ router.post('/add-machine', verifyToken, async (req, res) => {
 
 router.get('/get-machines', verifyToken, async (req, res) => {
     try {
-        const includePassword = req.query.include_password === 'true' || true; // Default to true
+        const includePassword = req.query.include_password === 'true' || true; 
         
         console.log('Getting machines for user:', {
             user_id: req.user.id,
@@ -136,6 +153,8 @@ router.get('/get-machines', verifyToken, async (req, res) => {
                 name: sampleMachine.name,
                 ip: sampleMachine.ip,
                 username: sampleMachine.username,
+                os_type: sampleMachine.os_type,
+                sub_os_type: sampleMachine.sub_os_type,
                 hasPassword: !!(sampleMachine.password),
                 marked_as: sampleMachine.marked_as,
                 keys: Object.keys(sampleMachine)
@@ -202,7 +221,9 @@ router.put('/update-machine/:machine_id', verifyToken, async (req, res) => {
             user_id: req.user.id,
             updateData: {
                 ...updateData,
-                password: updateData.password ? '***' : 'not provided'
+                password: updateData.password ? '***' : 'not provided',
+                os_type: updateData.os_type || 'not provided',
+                sub_os_type: updateData.sub_os_type || 'not provided'
             }
         });
 
@@ -365,6 +386,8 @@ router.get('/get-marked-machines', verifyToken, async (req, res) => {
                 id: sampleMachine.id,
                 name: sampleMachine.name,
                 ip: sampleMachine.ip,
+                os_type: sampleMachine.os_type,
+                sub_os_type: sampleMachine.sub_os_type,
                 hasPassword: !!(sampleMachine.password),
                 marked_as: sampleMachine.marked_as
             });
@@ -410,6 +433,8 @@ router.get('/get-machines-with-passwords', verifyToken, async (req, res) => {
                     name: machine.name,
                     ip: machine.ip,
                     username: machine.username,
+                    os_type: machine.os_type,
+                    sub_os_type: machine.sub_os_type,
                     hasPassword: !!(machine.password),
                     passwordLength: machine.password ? machine.password.length : 0,
                     marked_as: machine.marked_as

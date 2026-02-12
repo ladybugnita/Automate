@@ -1165,8 +1165,6 @@
     transform: rotate(360deg);
   }
 }
-/* Add these styles to your existing EventViewer.css */
-
 .select-machine-message {
     background-color: #e8f4fd;
     border: 1px solid #4299e1;
@@ -1251,8 +1249,6 @@
         transform: translateY(0);
     }
 }
-
-/* Update existing styles for better UX */
 .machine-select-container {
     margin: 20px 0;
 }
@@ -1293,7 +1289,6 @@
     cursor: not-allowed;
 }
 
-/* Disable category tabs when no machine selected */
 .category-tabs button:disabled {
     opacity: 0.5;
     cursor: not-allowed;
@@ -1303,7 +1298,6 @@
     background-color: transparent;
 }
 
-/* Update refresh button disabled state */
 .refresh-button:disabled,
 .refresh-single-btn:disabled,
 .action-button:disabled {

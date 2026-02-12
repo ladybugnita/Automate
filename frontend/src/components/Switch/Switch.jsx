@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { useWebSocket } from '../../context/WebSocketContext';
-import { Eye, EyeOff, RefreshCw, Plus, Trash2, Wifi, WifiOff, AlertCircle } from 'lucide-react';
+import { Eye, EyeOff, RefreshCw, Plus, Trash2, Wifi, WifiOff, AlertCircle, Shield, Zap, Lock } from 'lucide-react';
 import './Switch.css';
 
 const Switch = () => {
@@ -34,6 +34,24 @@ const Switch = () => {
   });
 
   const [ports, setPorts] = useState([{ interfaceName: '', mode: 'access', vlanId: '' }]);
+
+  const [portSecurityPorts, setPortSecurityPorts] = useState([{ 
+    interfaceName: '', 
+    maximumNumberOfDevice: '', 
+    violationType: 'protect', 
+    macAddressType: 'sticky',
+    macAddress: '' 
+  }]);
+
+  const [portFastConfig, setPortFastConfig] = useState({
+    configLevel: 'interface',
+    ports: [{ interfaceName: '' }]
+  });
+
+  const [bpduGuardConfig, setBpduGuardConfig] = useState({
+    configLevel: 'interface',
+    ports: [{ interfaceName: '' }]
+  });
 
   const isFetchingRef = useRef(false);
   const webSocketListenerRef = useRef(false);
@@ -164,11 +182,15 @@ const Switch = () => {
     const password = selectedDeviceData.ssh_password || selectedDeviceData.password || '';
     const username = selectedDeviceData.ssh_username || selectedDeviceData.username || '';
     const ip = selectedDeviceData.ip || selectedDeviceData.device_ip || '';
+    const device_type = selectedDeviceData.device_type || selectedDeviceData.type || 'switch';
+    const vendor = selectedDeviceData.vendor || '';
     
     console.log(`Switch: Credentials for selected device:`, {
       ip,
       username,
-      password: password ? '***HIDDEN***' : 'NOT FOUND'
+      password: password ? '***HIDDEN***' : 'NOT FOUND',
+      device_type,
+      vendor
     });
     
     if (!password) {
@@ -192,7 +214,9 @@ const Switch = () => {
     return {
       ip: ip,
       username: username,
-      password: password
+      password: password,
+      device_type: device_type,
+      vendor: vendor
     };
   }, [selectedDeviceData]);
 
@@ -216,6 +240,8 @@ const Switch = () => {
     const password = deviceToCheck.ssh_password || deviceToCheck.password || '';
     const username = deviceToCheck.ssh_username || deviceToCheck.username || '';
     const ip = deviceToCheck.ip || deviceToCheck.device_ip || '';
+    const device_type = deviceToCheck.device_type || deviceToCheck.type || 'switch';
+    const vendor = deviceToCheck.vendor || '';
     
     if (!ip || !username || !password) {
       console.error('Switch: Incomplete device data for status check');
@@ -227,10 +253,11 @@ const Switch = () => {
     const deviceInfo = {
       ip: ip,
       username: username,
-      password: password
+      password: password,
+      device_type: device_type,
+      vendor: vendor
     };
     
-    // UPDATED: Changed from device_info to network_device_info
     const payload = {
       network_device_info: deviceInfo
     };
@@ -304,7 +331,6 @@ const Switch = () => {
     return true;
   };
 
-  // Port Configuration Functions
   const addPort = () => {
     if (ports.length < 10) { 
       setPorts([...ports, { interfaceName: '', mode: 'access', vlanId: '' }]);
@@ -323,7 +349,6 @@ const Switch = () => {
     const newPorts = [...ports];
     newPorts[index][field] = value;
     
-    // If mode is changed to trunk, clear the VLAN ID
     if (field === 'mode' && value === 'trunk') {
       newPorts[index].vlanId = '';
     }
@@ -340,7 +365,6 @@ const Switch = () => {
         return false;
       }
       
-      // Validate interface name format (e.g., GigabitEthernet0/1, FastEthernet0/1, etc.)
       if (!/^[a-zA-Z]+[0-9]+\/[0-9]+$/.test(port.interfaceName.trim())) {
         setError(`Invalid interface name format for Port #${i + 1}. Use format like: GigabitEthernet0/1`);
         return false;
@@ -371,6 +395,385 @@ const Switch = () => {
     }
     
     return true;
+  };
+
+  const addPortSecurityPort = () => {
+    if (portSecurityPorts.length < 10) {
+      setPortSecurityPorts([...portSecurityPorts, { 
+        interfaceName: '', 
+        maximumNumberOfDevice: '', 
+        violationType: 'protect', 
+        macAddressType: 'sticky',
+        macAddress: '' 
+      }]);
+    }
+  };
+
+  const removePortSecurityPort = (index) => {
+    if (portSecurityPorts.length > 1) {
+      const newPorts = [...portSecurityPorts];
+      newPorts.splice(index, 1);
+      setPortSecurityPorts(newPorts);
+    }
+  };
+
+  const updatePortSecurityPort = (index, field, value) => {
+    const newPorts = [...portSecurityPorts];
+    newPorts[index][field] = value;
+    
+    if (field === 'macAddressType' && value === 'sticky') {
+      newPorts[index].macAddress = '';
+    }
+    
+    setPortSecurityPorts(newPorts);
+  };
+
+  const validatePortSecurityPorts = () => {
+    for (let i = 0; i < portSecurityPorts.length; i++) {
+      const port = portSecurityPorts[i];
+      
+      if (!port.interfaceName.trim()) {
+        setError(`Interface name is required for Port #${i + 1}`);
+        return false;
+      }
+      
+      if (!/^[a-zA-Z]+[0-9]+\/[0-9]+$/.test(port.interfaceName.trim())) {
+        setError(`Invalid interface name format for Port #${i + 1}. Use format like: GigabitEthernet0/1`);
+        return false;
+      }
+      
+      if (!port.maximumNumberOfDevice) {
+        setError(`Maximum number of devices is required for Port #${i + 1}`);
+        return false;
+      }
+      
+      const maxDevices = parseInt(port.maximumNumberOfDevice);
+      if (isNaN(maxDevices) || maxDevices < 1 || maxDevices > 100) {
+        setError(`Maximum number of devices must be between 1 and 100 for Port #${i + 1}`);
+        return false;
+      }
+      
+      if (!port.violationType) {
+        setError(`Violation type is required for Port #${i + 1}`);
+        return false;
+      }
+      
+      if (!port.macAddressType) {
+        setError(`MAC address type is required for Port #${i + 1}`);
+        return false;
+      }
+      
+      if (port.macAddressType === 'static' && !port.macAddress.trim()) {
+        setError(`MAC address is required for static MAC address type in Port #${i + 1}`);
+        return false;
+      }
+      
+      if (port.macAddressType === 'static' && port.macAddress.trim()) {
+        const macRegex = /^([0-9A-Fa-f]{2}-){5}[0-9A-Fa-f]{2}$/;
+        if (!macRegex.test(port.macAddress.trim())) {
+          setError(`Invalid MAC address format for Port #${i + 1}. Use format like: 0A-00-27-00-00-15`);
+          return false;
+        }
+      }
+    }
+    
+    return true;
+  };
+
+  const createPortSecurityPayload = useCallback(() => {
+    const deviceInfo = getDeviceInfo();
+    if (!deviceInfo) {
+      return null;
+    }
+    
+    const payload = {
+      network_device_info: deviceInfo
+    };
+    
+    portSecurityPorts.forEach((port, index) => {
+      if (port.interfaceName.trim() && port.maximumNumberOfDevice && port.violationType && port.macAddressType) {
+        const portConfig = {
+          interface_name: port.interfaceName.trim(),
+          maximum_number_of_device: parseInt(port.maximumNumberOfDevice),
+          violation_type: port.violationType,
+          mac_address_type: port.macAddressType
+        };
+        
+        if (port.macAddressType === 'static' && port.macAddress.trim()) {
+          portConfig.mac_address = port.macAddress.trim();
+        }
+        
+        payload[`port${index + 1}`] = portConfig;
+      }
+    });
+    
+    return payload;
+  }, [getDeviceInfo, portSecurityPorts]);
+
+  const handleConfigurePortSecurity = () => {
+    if (!validateDeviceSelection()) {
+      return;
+    }
+
+    if (!validatePortSecurityPorts()) {
+      return;
+    }
+
+    if (!isConnected) {
+      setError('Cannot configure port security: Not connected to backend system');
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+    setSuccessMessage(null);
+    
+    console.log('Switch: Configuring port security with network_device_info from database');
+    
+    const payload = createPortSecurityPayload();
+    if (!payload) {
+      setLoading(false);
+      return;
+    }
+    
+    console.log('Switch: Sending port security configuration payload:', {
+      ...payload,
+      network_device_info: { ...payload.network_device_info, password: '***HIDDEN***' }
+    });
+    
+    sendCommandWithFlow('change_port_mode_switch_ansible', payload);
+  };
+
+  const addPortFastPort = () => {
+    if (portFastConfig.ports.length < 10) {
+      setPortFastConfig({
+        ...portFastConfig,
+        ports: [...portFastConfig.ports, { interfaceName: '' }]
+      });
+    }
+  };
+
+  const removePortFastPort = (index) => {
+    if (portFastConfig.ports.length > 1) {
+      const newPorts = [...portFastConfig.ports];
+      newPorts.splice(index, 1);
+      setPortFastConfig({
+        ...portFastConfig,
+        ports: newPorts
+      });
+    }
+  };
+
+  const updatePortFastPort = (index, value) => {
+    const newPorts = [...portFastConfig.ports];
+    newPorts[index].interfaceName = value;
+    setPortFastConfig({
+      ...portFastConfig,
+      ports: newPorts
+    });
+  };
+
+  const updatePortFastConfigLevel = (level) => {
+    setPortFastConfig({
+      configLevel: level,
+      ports: [{ interfaceName: '' }]
+    });
+  };
+
+  const validatePortFastConfig = () => {
+    if (portFastConfig.configLevel === 'interface') {
+      for (let i = 0; i < portFastConfig.ports.length; i++) {
+        const port = portFastConfig.ports[i];
+        
+        if (!port.interfaceName.trim()) {
+          setError(`Interface name is required for Port #${i + 1}`);
+          return false;
+        }
+        
+        if (!/^[a-zA-Z]+[0-9]+\/[0-9]+$/.test(port.interfaceName.trim())) {
+          setError(`Invalid interface name format for Port #${i + 1}. Use format like: GigabitEthernet0/1`);
+          return false;
+        }
+      }
+    }
+    
+    return true;
+  };
+
+  const createPortFastPayload = useCallback(() => {
+    const deviceInfo = getDeviceInfo();
+    if (!deviceInfo) {
+      return null;
+    }
+    
+    const payload = {
+      network_device_info: deviceInfo
+    };
+    
+    if (portFastConfig.configLevel === 'interface') {
+      portFastConfig.ports.forEach((port, index) => {
+        if (port.interfaceName.trim()) {
+          payload[`port${index + 1}`] = port.interfaceName.trim();
+        }
+      });
+    }
+    
+    return payload;
+  }, [getDeviceInfo, portFastConfig]);
+
+  const handleConfigurePortFast = () => {
+    if (!validateDeviceSelection()) {
+      return;
+    }
+
+    if (!validatePortFastConfig()) {
+      return;
+    }
+
+    if (!isConnected) {
+      setError('Cannot configure Port Fast: Not connected to backend system');
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+    setSuccessMessage(null);
+    
+    console.log(`Switch: Configuring Port Fast at ${portFastConfig.configLevel} level with network_device_info from database`);
+    
+    const payload = createPortFastPayload();
+    if (!payload) {
+      setLoading(false);
+      return;
+    }
+    
+    console.log('Switch: Sending Port Fast configuration payload:', {
+      ...payload,
+      network_device_info: { ...payload.network_device_info, password: '***HIDDEN***' }
+    });
+    
+    const command = portFastConfig.configLevel === 'interface' 
+      ? 'configure_port_fast_interface_level_switch_ansible' 
+      : 'configure_port_fast_global_level_switch_ansible';
+    
+    console.log(`Switch: Sending command: ${command}`);
+    sendCommandWithFlow(command, payload);
+  };
+
+  const addBpduGuardPort = () => {
+    if (bpduGuardConfig.ports.length < 10) {
+      setBpduGuardConfig({
+        ...bpduGuardConfig,
+        ports: [...bpduGuardConfig.ports, { interfaceName: '' }]
+      });
+    }
+  };
+
+  const removeBpduGuardPort = (index) => {
+    if (bpduGuardConfig.ports.length > 1) {
+      const newPorts = [...bpduGuardConfig.ports];
+      newPorts.splice(index, 1);
+      setBpduGuardConfig({
+        ...bpduGuardConfig,
+        ports: newPorts
+      });
+    }
+  };
+
+  const updateBpduGuardPort = (index, value) => {
+    const newPorts = [...bpduGuardConfig.ports];
+    newPorts[index].interfaceName = value;
+    setBpduGuardConfig({
+      ...bpduGuardConfig,
+      ports: newPorts
+    });
+  };
+
+  const updateBpduGuardConfigLevel = (level) => {
+    setBpduGuardConfig({
+      configLevel: level,
+      ports: [{ interfaceName: '' }]
+    });
+  };
+
+  const validateBpduGuardConfig = () => {
+    if (bpduGuardConfig.configLevel === 'interface') {
+      for (let i = 0; i < bpduGuardConfig.ports.length; i++) {
+        const port = bpduGuardConfig.ports[i];
+        
+        if (!port.interfaceName.trim()) {
+          setError(`Interface name is required for Port #${i + 1}`);
+          return false;
+        }
+        
+        if (!/^[a-zA-Z]+[0-9]+\/[0-9]+$/.test(port.interfaceName.trim())) {
+          setError(`Invalid interface name format for Port #${i + 1}. Use format like: GigabitEthernet0/1`);
+          return false;
+        }
+      }
+    }
+    
+    return true;
+  };
+
+  const createBpduGuardPayload = useCallback(() => {
+    const deviceInfo = getDeviceInfo();
+    if (!deviceInfo) {
+      return null;
+    }
+    
+    const payload = {
+      network_device_info: deviceInfo
+    };
+    
+    if (bpduGuardConfig.configLevel === 'interface') {
+      bpduGuardConfig.ports.forEach((port, index) => {
+        if (port.interfaceName.trim()) {
+          payload[`port${index + 1}`] = port.interfaceName.trim();
+        }
+      });
+    }
+    
+    return payload;
+  }, [getDeviceInfo, bpduGuardConfig]);
+
+  const handleConfigureBpduGuard = () => {
+    if (!validateDeviceSelection()) {
+      return;
+    }
+
+    if (!validateBpduGuardConfig()) {
+      return;
+    }
+
+    if (!isConnected) {
+      setError('Cannot configure BPDU Guard: Not connected to backend system');
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+    setSuccessMessage(null);
+    
+    console.log(`Switch: Configuring BPDU Guard at ${bpduGuardConfig.configLevel} level with network_device_info from database`);
+    
+    const payload = createBpduGuardPayload();
+    if (!payload) {
+      setLoading(false);
+      return;
+    }
+    
+    console.log('Switch: Sending BPDU Guard configuration payload:', {
+      ...payload,
+      network_device_info: { ...payload.network_device_info, password: '***HIDDEN***' }
+    });
+    
+    const command = bpduGuardConfig.configLevel === 'interface' 
+      ? 'configure_bpdu_guard_interface_level_switch_ansible' 
+      : 'configure_bpdu_global_level_switch_ansible';
+    
+    console.log(`Switch: Sending command: ${command}`);
+    sendCommandWithFlow(command, payload);
   };
 
   const fetchDevices = useCallback(async () => {
@@ -470,7 +873,6 @@ const Switch = () => {
     return payload;
   }, [createDevicePayload, vlans]);
 
-  // Create Port Configuration Payload
   const createPortPayload = useCallback(() => {
     const basePayload = createDevicePayload();
     if (!basePayload) {
@@ -522,6 +924,8 @@ const Switch = () => {
     const password = device.ssh_password || device.password || '';
     const username = device.ssh_username || device.username || '';
     const ip = device.ip || device.device_ip || '';
+    const device_type = device.device_type || device.type || 'switch';
+    const vendor = device.vendor || '';
     
     if (!ip || !username || !password) {
       console.error('Switch: Incomplete device data for VLAN details fetch');
@@ -534,10 +938,11 @@ const Switch = () => {
     const deviceInfo = {
       ip: ip,
       username: username,
-      password: password
+      password: password,
+      device_type: device_type,
+      vendor: vendor
     };
     
-    // UPDATED: Changed from device_info to network_device_info
     const payload = {
       network_device_info: deviceInfo
     };
@@ -671,7 +1076,6 @@ const Switch = () => {
         console.log('Switch: Processing device status response');
         setDeviceStatusLoading(false);
         
-        // Handle both boolean true/false and string 'true'/'false' responses
         if (responseData === true || responseData === 'true') {
           setDeviceStatus('up');
           console.log('Switch: Device is UP:', selectedDeviceData?.name || selectedDeviceData?.device_name);
@@ -680,7 +1084,6 @@ const Switch = () => {
           setShowDeviceDownModal(true);
           console.log('Switch: Device is DOWN:', selectedDeviceData?.name || selectedDeviceData?.device_name);
         } else if (responseData && typeof responseData === 'object') {
-          // Handle object response for backward compatibility
           if (responseData.status === true || responseData.status === 'true' || responseData.is_up === true) {
             setDeviceStatus('up');
             console.log('Switch: Device is UP:', selectedDeviceData?.name || selectedDeviceData?.device_name);
@@ -784,32 +1187,124 @@ const Switch = () => {
         processNextCommand();
         break;
         
-      // ADD NEW COMMAND HANDLER: change_port_mode_switch_ansible
       case 'change_port_mode_switch_ansible':
         console.log('Switch: Processing port mode change response');
         setLoading(false);
         
         if (responseData && responseData.success !== false) {
-          setSuccessMessage('Port mode changed successfully!');
+          setSuccessMessage('Port configuration completed successfully!');
           setPorts([{ interfaceName: '', mode: 'access', vlanId: '' }]); 
+          setPortSecurityPorts([{ 
+            interfaceName: '', 
+            maximumNumberOfDevice: '', 
+            violationType: 'protect', 
+            macAddressType: 'sticky',
+            macAddress: '' 
+          }]);
           
           setTimeout(() => {
             setSuccessMessage(null);
           }, 5000);
         } else {
-          const errorMsg = responseData?.error || 'Failed to change port mode';
+          const errorMsg = responseData?.error || 'Failed to configure port';
           setError(`Error: ${errorMsg}`);
         }
         commandInProgressRef.current = false;
         processNextCommand();
         break;
         
-      // Handle the old is_device_up command for backward compatibility
+      case 'configure_port_fast_interface_level_switch_ansible':
+        console.log('Switch: Processing Port Fast interface level response');
+        setLoading(false);
+        
+        if (responseData && responseData.success !== false) {
+          setSuccessMessage('Port fast configured successfully on interface level switch');
+          setPortFastConfig({
+            configLevel: 'interface',
+            ports: [{ interfaceName: '' }]
+          });
+          
+          setTimeout(() => {
+            setSuccessMessage(null);
+          }, 5000);
+        } else {
+          const errorMsg = responseData?.error || 'Failed to configure Port Fast at interface level';
+          setError(`Error: ${errorMsg}`);
+        }
+        commandInProgressRef.current = false;
+        processNextCommand();
+        break;
+        
+      case 'configure_port_fast_global_level_switch_ansible':
+        console.log('Switch: Processing Port Fast global level response');
+        setLoading(false);
+        
+        if (responseData && responseData.success !== false) {
+          setSuccessMessage('Port fast configured successfully on global level switch');
+          setPortFastConfig({
+            configLevel: 'interface',
+            ports: [{ interfaceName: '' }]
+          });
+          
+          setTimeout(() => {
+            setSuccessMessage(null);
+          }, 5000);
+        } else {
+          const errorMsg = responseData?.error || 'Failed to configure Port Fast at global level';
+          setError(`Error: ${errorMsg}`);
+        }
+        commandInProgressRef.current = false;
+        processNextCommand();
+        break;
+        
+      case 'configure_bpdu_guard_interface_level_switch_ansible':
+        console.log('Switch: Processing BPDU Guard interface level response');
+        setLoading(false);
+        
+        if (responseData && responseData.success !== false) {
+          setSuccessMessage('BPDU guard configured successfully on interface level switch');
+          setBpduGuardConfig({
+            configLevel: 'interface',
+            ports: [{ interfaceName: '' }]
+          });
+          
+          setTimeout(() => {
+            setSuccessMessage(null);
+          }, 5000);
+        } else {
+          const errorMsg = responseData?.error || 'Failed to configure BPDU Guard at interface level';
+          setError(`Error: ${errorMsg}`);
+        }
+        commandInProgressRef.current = false;
+        processNextCommand();
+        break;
+        
+      case 'configure_bpdu_global_level_switch_ansible':
+        console.log('Switch: Processing BPDU Guard global level response');
+        setLoading(false);
+        
+        if (responseData && responseData.success !== false) {
+          setSuccessMessage('BPDU guard configured successfully on global level switch');
+          setBpduGuardConfig({
+            configLevel: 'interface',
+            ports: [{ interfaceName: '' }]
+          });
+          
+          setTimeout(() => {
+            setSuccessMessage(null);
+          }, 5000);
+        } else {
+          const errorMsg = responseData?.error || 'Failed to configure BPDU Guard at global level';
+          setError(`Error: ${errorMsg}`);
+        }
+        commandInProgressRef.current = false;
+        processNextCommand();
+        break;
+        
       case 'is_device_up':
         console.log('Switch: Processing OLD is_device_up response (backward compatibility)');
         setDeviceStatusLoading(false);
         
-        // Handle the old response format
         if (responseData && responseData.status === 'true') {
           setDeviceStatus('up');
           console.log('Switch: Device is UP (old format):', selectedDeviceData?.name || selectedDeviceData?.device_name);
@@ -946,8 +1441,8 @@ const Switch = () => {
     
     const payload = {
       ...devicePayload,
-      vtp_domain: vtpConfig.domainName.trim(),  // Changed from domain_name to vtp_domain
-      vtp_password: vtpConfig.password.trim()   // Changed from password to vtp_password
+      vtp_domain: vtpConfig.domainName.trim(),
+      vtp_password: vtpConfig.password.trim()
     };
     
     console.log('Switch: Sending VTP payload:', {
@@ -955,7 +1450,6 @@ const Switch = () => {
       network_device_info: { ...payload.network_device_info, password: '***HIDDEN***' }
     });
     
-    // Send different command based on selected mode
     const command = vtpConfig.mode === 'server' 
       ? 'configure_vtp_server_switch_ansible' 
       : 'configure_vtp_client_switch_ansible';
@@ -964,7 +1458,6 @@ const Switch = () => {
     sendCommandWithFlow(command, payload);
   };
 
-  // Port Configuration Handler
   const handleConfigurePorts = () => {
     if (!validateDeviceSelection()) {
       return;
@@ -1331,6 +1824,12 @@ const Switch = () => {
                           </span>
                         </div>
                         <div className="device-detail-item">
+                          <span className="detail-label">Vendor:</span>
+                          <span className="detail-value">
+                            {selectedDeviceData.vendor || 'Unknown'}
+                          </span>
+                        </div>
+                        <div className="device-detail-item">
                           <span className="detail-label">Status:</span>
                           <span className="detail-value">{selectedDeviceData.status || 'active'}</span>
                         </div>
@@ -1398,6 +1897,33 @@ const Switch = () => {
                 disabled={loading || !isConnected || !selectedDevice || commandInProgressRef.current}
               >
                 Port Configuration
+              </button>
+              {/* NEW: Port Security Tab */}
+              <button
+                className={`config-tab ${activeTab === 'port-security' ? 'active' : ''}`}
+                onClick={() => setActiveTab('port-security')}
+                disabled={loading || !isConnected || !selectedDevice || commandInProgressRef.current}
+              >
+                <Lock size={16} style={{ marginRight: '4px' }} />
+                Port Security
+              </button>
+              {/* NEW: Port Fast Tab */}
+              <button
+                className={`config-tab ${activeTab === 'port-fast' ? 'active' : ''}`}
+                onClick={() => setActiveTab('port-fast')}
+                disabled={loading || !isConnected || !selectedDevice || commandInProgressRef.current}
+              >
+                <Zap size={16} style={{ marginRight: '4px' }} />
+                Port Fast
+              </button>
+              {/* NEW: BPDU Guard Tab */}
+              <button
+                className={`config-tab ${activeTab === 'bpdu-guard' ? 'active' : ''}`}
+                onClick={() => setActiveTab('bpdu-guard')}
+                disabled={loading || !isConnected || !selectedDevice || commandInProgressRef.current}
+              >
+                <Shield size={16} style={{ marginRight: '4px' }} />
+                BPDU Guard
               </button>
             </div>
 
@@ -1640,7 +2166,6 @@ const Switch = () => {
                     >
                       <option value="server">Server</option>
                       <option value="client">Client</option>
-                      {/* Removed transparent option */}
                     </select>
                   </div>
                   
@@ -1704,7 +2229,7 @@ const Switch = () => {
                   </button>
                 </div>
               </div>
-            ) : (
+            ) : activeTab === 'port' ? (
               <div className="port-config-card">
                 <div className="port-header">
                   <h3 className="form-title">Port Configuration</h3>
@@ -1840,7 +2365,7 @@ const Switch = () => {
                       </div>
                       <div className="preview-row">
                         <span className="preview-label">Operation:</span>
-                        <span className="preview-value">Change port mode using stored credentials</span>
+                        <span className="preview-value">Configure port mode using stored credentials</span>
                       </div>
                     </div>
                   </div>
@@ -1854,7 +2379,502 @@ const Switch = () => {
                   </button>
                 </div>
               </div>
-            )}
+            ) : activeTab === 'port-security' ? (
+              <div className="port-security-config-card">
+                <div className="port-security-header">
+                  <h3 className="form-title">
+                    <Lock size={18} style={{ marginRight: '8px' }} />
+                    Port Security Configuration
+                  </h3>
+                  <div className="port-security-subtitle">
+                    <p>Configure port security to limit and secure MAC addresses on switch ports</p>
+                  </div>
+                </div>
+                
+                <div className="form-content">
+                  {portSecurityPorts.map((port, index) => (
+                    <div key={index} className="port-security-input-group">
+                      <div className="port-security-input-header">
+                        <span className="port-security-number">Port #{index + 1}</span>
+                        {portSecurityPorts.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => removePortSecurityPort(index)}
+                            className="btn-remove-port-security"
+                            disabled={loading || !isConnected || !selectedDevice || commandInProgressRef.current}
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        )}
+                      </div>
+                      
+                      <div className="port-security-input-row">
+                        <div className="port-security-input-field">
+                          <label className="form-label">
+                            Interface Name
+                            <span className="form-hint">(e.g., GigabitEthernet0/2)</span>
+                          </label>
+                          <input
+                            type="text"
+                            value={port.interfaceName}
+                            onChange={(e) => updatePortSecurityPort(index, 'interfaceName', e.target.value)}
+                            className="form-input"
+                            placeholder="Enter interface name"
+                            disabled={loading || !isConnected || !selectedDevice || commandInProgressRef.current}
+                          />
+                        </div>
+                        
+                        <div className="port-security-input-field">
+                          <label className="form-label">
+                            Maximum Devices
+                            <span className="form-hint">(1-100)</span>
+                          </label>
+                          <input
+                            type="number"
+                            value={port.maximumNumberOfDevice}
+                            onChange={(e) => updatePortSecurityPort(index, 'maximumNumberOfDevice', e.target.value)}
+                            className="form-input"
+                            placeholder="Enter maximum devices"
+                            min="1"
+                            max="100"
+                            disabled={loading || !isConnected || !selectedDevice || commandInProgressRef.current}
+                          />
+                        </div>
+                      </div>
+                      
+                      <div className="port-security-input-row">
+                        <div className="port-security-input-field">
+                          <label className="form-label">Violation Type</label>
+                          <select
+                            value={port.violationType}
+                            onChange={(e) => updatePortSecurityPort(index, 'violationType', e.target.value)}
+                            className="form-select"
+                            disabled={loading || !isConnected || !selectedDevice || commandInProgressRef.current}
+                          >
+                            <option value="protect">Protect</option>
+                            <option value="restrict">Restrict</option>
+                            <option value="shutdown">Shutdown</option>
+                          </select>
+                        </div>
+                        
+                        <div className="port-security-input-field">
+                          <label className="form-label">MAC Address Type</label>
+                          <select
+                            value={port.macAddressType}
+                            onChange={(e) => updatePortSecurityPort(index, 'macAddressType', e.target.value)}
+                            className="form-select"
+                            disabled={loading || !isConnected || !selectedDevice || commandInProgressRef.current}
+                          >
+                            <option value="sticky">Sticky</option>
+                            <option value="static">Static</option>
+                          </select>
+                        </div>
+                      </div>
+                      
+                      {port.macAddressType === 'static' && (
+                        <div className="port-security-input-row">
+                          <div className="port-security-input-field">
+                            <label className="form-label">
+                              MAC Address
+                              <span className="form-hint">(e.g., 0A-00-27-00-00-15)</span>
+                            </label>
+                            <input
+                              type="text"
+                              value={port.macAddress}
+                              onChange={(e) => updatePortSecurityPort(index, 'macAddress', e.target.value)}
+                              className="form-input"
+                              placeholder="Enter MAC address"
+                              disabled={loading || !isConnected || !selectedDevice || commandInProgressRef.current}
+                            />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                  
+                  <div className="port-security-actions">
+                    <button
+                      onClick={addPortSecurityPort}
+                      className="btn-add-port-security"
+                      disabled={loading || !isConnected || !selectedDevice || portSecurityPorts.length >= 10 || commandInProgressRef.current}
+                    >
+                      <Plus size={16} />
+                      Add Another Port
+                    </button>
+                    <span className="port-security-count">
+                      {portSecurityPorts.length} port(s) configured
+                    </span>
+                  </div>
+                  
+                  <div className="config-preview">
+                    <h4>Configuration Preview</h4>
+                    <div className="preview-content">
+                      <div className="preview-row">
+                        <span className="preview-label">Device:</span>
+                        <span className="preview-value">
+                          {selectedDeviceData?.name || selectedDeviceData?.device_name || 'Not selected'}
+                        </span>
+                      </div>
+                      <div className="preview-row">
+                        <span className="preview-label">Switch IP:</span>
+                        <span className="preview-value">{selectedDeviceData?.ip || selectedDeviceData?.device_ip || 'Not selected'}</span>
+                      </div>
+                      <div className="preview-row">
+                        <span className="preview-label">Device Status:</span>
+                        <span className="preview-value">
+                          {deviceStatus === 'up' ? (
+                            <span className="status-up">✓ Reachable</span>
+                          ) : deviceStatus === 'down' ? (
+                            <span className="status-down">✗ Not Reachable</span>
+                          ) : deviceStatus === 'checking' ? (
+                            <span className="status-checking">Checking...</span>
+                          ) : (
+                            <span className="status-unknown">Unknown</span>
+                          )}
+                        </span>
+                      </div>
+                      <div className="preview-row">
+                        <span className="preview-label">Ports to Secure:</span>
+                        <span className="preview-value">
+                          {portSecurityPorts.filter(p => p.interfaceName && p.maximumNumberOfDevice).length > 0 
+                            ? portSecurityPorts.filter(p => p.interfaceName && p.maximumNumberOfDevice).map((p, i) => 
+                                `${p.interfaceName} (max: ${p.maximumNumberOfDevice}, violation: ${p.violationType}, MAC type: ${p.macAddressType}${p.macAddressType === 'static' && p.macAddress ? `, MAC: ${p.macAddress}` : ''})`
+                              ).join(', ')
+                            : 'No ports configured'
+                          }
+                        </span>
+                      </div>
+                      <div className="preview-row">
+                        <span className="preview-label">Operation:</span>
+                        <span className="preview-value">Configure port security using stored credentials</span>
+                      </div>
+                    </div>
+                  </div>
+                  
+                  <button
+                    onClick={handleConfigurePortSecurity}
+                    className="form-button"
+                    disabled={loading || !isConnected || !selectedDevice || portSecurityPorts.filter(p => p.interfaceName && p.maximumNumberOfDevice && p.violationType && p.macAddressType).length === 0 || commandInProgressRef.current}
+                  >
+                    {loading ? 'Configuring Port Security...' : 'Configure Port Security'}
+                  </button>
+                </div>
+              </div>
+            ) : activeTab === 'port-fast' ? (
+              <div className="port-fast-config-card">
+                <div className="port-fast-header">
+                  <h3 className="form-title">
+                    <Zap size={18} style={{ marginRight: '8px' }} />
+                    Port Fast Configuration
+                  </h3>
+                  <div className="port-fast-subtitle">
+                    <p>Configure Port Fast to immediately transition ports to forwarding state</p>
+                  </div>
+                </div>
+                
+                <div className="form-content">
+                  <div className="form-group">
+                    <label className="form-label">Configuration Level</label>
+                    <div className="config-level-selector">
+                      <button
+                        className={`config-level-btn ${portFastConfig.configLevel === 'interface' ? 'active' : ''}`}
+                        onClick={() => updatePortFastConfigLevel('interface')}
+                        disabled={loading || !isConnected || !selectedDevice || commandInProgressRef.current}
+                      >
+                        Interface Level
+                      </button>
+                      <button
+                        className={`config-level-btn ${portFastConfig.configLevel === 'global' ? 'active' : ''}`}
+                        onClick={() => updatePortFastConfigLevel('global')}
+                        disabled={loading || !isConnected || !selectedDevice || commandInProgressRef.current}
+                      >
+                        Global Level
+                      </button>
+                    </div>
+                  </div>
+                  
+                  {portFastConfig.configLevel === 'interface' && (
+                    <>
+                      {portFastConfig.ports.map((port, index) => (
+                        <div key={index} className="port-fast-input-group">
+                          <div className="port-fast-input-header">
+                            <span className="port-fast-number">Port #{index + 1}</span>
+                            {portFastConfig.ports.length > 1 && (
+                              <button
+                                type="button"
+                                onClick={() => removePortFastPort(index)}
+                                className="btn-remove-port-fast"
+                                disabled={loading || !isConnected || !selectedDevice || commandInProgressRef.current}
+                              >
+                                <Trash2 size={16} />
+                              </button>
+                            )}
+                          </div>
+                          
+                          <div className="port-fast-input-row">
+                            <div className="port-fast-input-field">
+                              <label className="form-label">
+                                Interface Name
+                                <span className="form-hint">(e.g., GigabitEthernet0/1)</span>
+                              </label>
+                              <input
+                                type="text"
+                                value={port.interfaceName}
+                                onChange={(e) => updatePortFastPort(index, e.target.value)}
+                                className="form-input"
+                                placeholder="Enter interface name"
+                                disabled={loading || !isConnected || !selectedDevice || commandInProgressRef.current}
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                      
+                      <div className="port-fast-actions">
+                        <button
+                          onClick={addPortFastPort}
+                          className="btn-add-port-fast"
+                          disabled={loading || !isConnected || !selectedDevice || portFastConfig.ports.length >= 10 || commandInProgressRef.current}
+                        >
+                          <Plus size={16} />
+                          Add Another Port
+                        </button>
+                        <span className="port-fast-count">
+                          {portFastConfig.ports.length} port(s) configured
+                        </span>
+                      </div>
+                    </>
+                  )}
+                  
+                  <div className="config-preview">
+                    <h4>Configuration Preview</h4>
+                    <div className="preview-content">
+                      <div className="preview-row">
+                        <span className="preview-label">Device:</span>
+                        <span className="preview-value">
+                          {selectedDeviceData?.name || selectedDeviceData?.device_name || 'Not selected'}
+                        </span>
+                      </div>
+                      <div className="preview-row">
+                        <span className="preview-label">Switch IP:</span>
+                        <span className="preview-value">{selectedDeviceData?.ip || selectedDeviceData?.device_ip || 'Not selected'}</span>
+                      </div>
+                      <div className="preview-row">
+                        <span className="preview-label">Device Status:</span>
+                        <span className="preview-value">
+                          {deviceStatus === 'up' ? (
+                            <span className="status-up">✓ Reachable</span>
+                          ) : deviceStatus === 'down' ? (
+                            <span className="status-down">✗ Not Reachable</span>
+                          ) : deviceStatus === 'checking' ? (
+                            <span className="status-checking">Checking...</span>
+                          ) : (
+                            <span className="status-unknown">Unknown</span>
+                          )}
+                        </span>
+                      </div>
+                      <div className="preview-row">
+                        <span className="preview-label">Configuration Level:</span>
+                        <span className="preview-value">
+                          {portFastConfig.configLevel === 'interface' ? 'Interface Level' : 'Global Level'}
+                        </span>
+                      </div>
+                      {portFastConfig.configLevel === 'interface' && (
+                        <div className="preview-row">
+                          <span className="preview-label">Ports to Configure:</span>
+                          <span className="preview-value">
+                            {portFastConfig.ports.filter(p => p.interfaceName).length > 0 
+                              ? portFastConfig.ports.filter(p => p.interfaceName).map(p => p.interfaceName).join(', ')
+                              : 'No ports configured'
+                            }
+                          </span>
+                        </div>
+                      )}
+                      <div className="preview-row">
+                        <span className="preview-label">Command to be sent:</span>
+                        <span className="preview-value">
+                          {portFastConfig.configLevel === 'interface' 
+                            ? 'configure_port_fast_interface_level_switch_ansible' 
+                            : 'configure_port_fast_global_level_switch_ansible'}
+                        </span>
+                      </div>
+                      <div className="preview-row">
+                        <span className="preview-label">Operation:</span>
+                        <span className="preview-value">Configure Port Fast using stored credentials</span>
+                      </div>
+                    </div>
+                  </div>
+                  
+                  <button
+                    onClick={handleConfigurePortFast}
+                    className="form-button"
+                    disabled={
+                      loading || !isConnected || !selectedDevice || commandInProgressRef.current ||
+                      (portFastConfig.configLevel === 'interface' && portFastConfig.ports.filter(p => p.interfaceName).length === 0)
+                    }
+                  >
+                    {loading ? 'Configuring Port Fast...' : 'Configure Port Fast'}
+                  </button>
+                </div>
+              </div>
+            ) : activeTab === 'bpdu-guard' ? (
+              <div className="bpdu-guard-config-card">
+                <div className="bpdu-guard-header">
+                  <h3 className="form-title">
+                    <Shield size={18} style={{ marginRight: '8px' }} />
+                    BPDU Guard Configuration
+                  </h3>
+                  <div className="bpdu-guard-subtitle">
+                    <p>Configure BPDU Guard to protect spanning tree topology</p>
+                  </div>
+                </div>
+                
+                <div className="form-content">
+                  <div className="form-group">
+                    <label className="form-label">Configuration Level</label>
+                    <div className="config-level-selector">
+                      <button
+                        className={`config-level-btn ${bpduGuardConfig.configLevel === 'interface' ? 'active' : ''}`}
+                        onClick={() => updateBpduGuardConfigLevel('interface')}
+                        disabled={loading || !isConnected || !selectedDevice || commandInProgressRef.current}
+                      >
+                        Interface Level
+                      </button>
+                      <button
+                        className={`config-level-btn ${bpduGuardConfig.configLevel === 'global' ? 'active' : ''}`}
+                        onClick={() => updateBpduGuardConfigLevel('global')}
+                        disabled={loading || !isConnected || !selectedDevice || commandInProgressRef.current}
+                      >
+                        Global Level
+                      </button>
+                    </div>
+                  </div>
+                  
+                  {bpduGuardConfig.configLevel === 'interface' && (
+                    <>
+                      {bpduGuardConfig.ports.map((port, index) => (
+                        <div key={index} className="bpdu-guard-input-group">
+                          <div className="bpdu-guard-input-header">
+                            <span className="bpdu-guard-number">Port #{index + 1}</span>
+                            {bpduGuardConfig.ports.length > 1 && (
+                              <button
+                                type="button"
+                                onClick={() => removeBpduGuardPort(index)}
+                                className="btn-remove-bpdu-guard"
+                                disabled={loading || !isConnected || !selectedDevice || commandInProgressRef.current}
+                              >
+                                <Trash2 size={16} />
+                              </button>
+                            )}
+                          </div>
+                          
+                          <div className="bpdu-guard-input-row">
+                            <div className="bpdu-guard-input-field">
+                              <label className="form-label">
+                                Interface Name
+                                <span className="form-hint">(e.g., GigabitEthernet0/1)</span>
+                              </label>
+                              <input
+                                type="text"
+                                value={port.interfaceName}
+                                onChange={(e) => updateBpduGuardPort(index, e.target.value)}
+                                className="form-input"
+                                placeholder="Enter interface name"
+                                disabled={loading || !isConnected || !selectedDevice || commandInProgressRef.current}
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                      
+                      <div className="bpdu-guard-actions">
+                        <button
+                          onClick={addBpduGuardPort}
+                          className="btn-add-bpdu-guard"
+                          disabled={loading || !isConnected || !selectedDevice || bpduGuardConfig.ports.length >= 10 || commandInProgressRef.current}
+                        >
+                          <Plus size={16} />
+                          Add Another Port
+                        </button>
+                        <span className="bpdu-guard-count">
+                          {bpduGuardConfig.ports.length} port(s) configured
+                        </span>
+                      </div>
+                    </>
+                  )}
+                  
+                  <div className="config-preview">
+                    <h4>Configuration Preview</h4>
+                    <div className="preview-content">
+                      <div className="preview-row">
+                        <span className="preview-label">Device:</span>
+                        <span className="preview-value">
+                          {selectedDeviceData?.name || selectedDeviceData?.device_name || 'Not selected'}
+                        </span>
+                      </div>
+                      <div className="preview-row">
+                        <span className="preview-label">Switch IP:</span>
+                        <span className="preview-value">{selectedDeviceData?.ip || selectedDeviceData?.device_ip || 'Not selected'}</span>
+                      </div>
+                      <div className="preview-row">
+                        <span className="preview-label">Device Status:</span>
+                        <span className="preview-value">
+                          {deviceStatus === 'up' ? (
+                            <span className="status-up">✓ Reachable</span>
+                          ) : deviceStatus === 'down' ? (
+                            <span className="status-down">✗ Not Reachable</span>
+                          ) : deviceStatus === 'checking' ? (
+                            <span className="status-checking">Checking...</span>
+                          ) : (
+                            <span className="status-unknown">Unknown</span>
+                          )}
+                        </span>
+                      </div>
+                      <div className="preview-row">
+                        <span className="preview-label">Configuration Level:</span>
+                        <span className="preview-value">
+                          {bpduGuardConfig.configLevel === 'interface' ? 'Interface Level' : 'Global Level'}
+                        </span>
+                      </div>
+                      {bpduGuardConfig.configLevel === 'interface' && (
+                        <div className="preview-row">
+                          <span className="preview-label">Ports to Configure:</span>
+                          <span className="preview-value">
+                            {bpduGuardConfig.ports.filter(p => p.interfaceName).length > 0 
+                              ? bpduGuardConfig.ports.filter(p => p.interfaceName).map(p => p.interfaceName).join(', ')
+                              : 'No ports configured'
+                            }
+                          </span>
+                        </div>
+                      )}
+                      <div className="preview-row">
+                        <span className="preview-label">Command to be sent:</span>
+                        <span className="preview-value">
+                          {bpduGuardConfig.configLevel === 'interface' 
+                            ? 'configure_bpdu_guard_interface_level_switch_ansible' 
+                            : 'configure_bpdu_global_level_switch_ansible'}
+                        </span>
+                      </div>
+                      <div className="preview-row">
+                        <span className="preview-label">Operation:</span>
+                        <span className="preview-value">Configure BPDU Guard using stored credentials</span>
+                      </div>
+                    </div>
+                  </div>
+                  
+                  <button
+                    onClick={handleConfigureBpduGuard}
+                    className="form-button"
+                    disabled={
+                      loading || !isConnected || !selectedDevice || commandInProgressRef.current ||
+                      (bpduGuardConfig.configLevel === 'interface' && bpduGuardConfig.ports.filter(p => p.interfaceName).length === 0)
+                    }
+                  >
+                    {loading ? 'Configuring BPDU Guard...' : 'Configure BPDU Guard'}
+                  </button>
+                </div>
+              </div>
+            ) : null}
             
             {!isConnected && (
               <div className="no-connection-notice">

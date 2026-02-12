@@ -139,29 +139,20 @@ const DHCP = () => {
   const mountedRef = useRef(false);
   const machineInfoListenerRef = useRef(false);
   
-  // NEW: Command flow management refs
   const commandInProgressRef = useRef(false);
   const pendingCommandsRef = useRef([]);
   const lastDHCPCheckTimeRef = useRef(0);
   const lastDHCPInstallTimeRef = useRef(0);
-  const commandCooldownTime = 1000; // 1 second cooldown between same commands
+  const commandCooldownTime = 1000; 
 
-  // Get the API base URL dynamically
   const API_BASE_URL = window.location.origin.includes('localhost') 
     ? 'http://localhost:5000'
     : `http://${window.location.hostname}:5000`;
 
-  // ============ COMMAND FLOW MANAGEMENT ============
-  
-  /**
-   * Send a command with deduplication and cooldown
-   * Prevents sending the same command multiple times in quick succession
-   */
   const sendCommandWithFlow = useCallback((command, payload = null) => {
     const now = Date.now();
     
-    // Check if this command was sent recently
-    if (command === 'check_dhcp_role_installed_windows_ansible') {
+    if (command === 'check_dhcp_role_installed_server_ansible') {
       const timeSinceLastCheck = now - lastDHCPCheckTimeRef.current;
       if (timeSinceLastCheck < commandCooldownTime) {
         console.log(`DHCP: Skipping duplicate ${command} command (cooldown: ${commandCooldownTime - timeSinceLastCheck}ms remaining)`);
@@ -170,7 +161,7 @@ const DHCP = () => {
       lastDHCPCheckTimeRef.current = now;
     }
     
-    if (command === 'install_dhcp_role_windows_ansible') {
+    if (command === 'install_dhcp_role_server_ansible') {
       const timeSinceLastInstall = now - lastDHCPInstallTimeRef.current;
       if (timeSinceLastInstall < commandCooldownTime) {
         console.log(`DHCP: Skipping duplicate ${command} command (cooldown: ${commandCooldownTime - timeSinceLastInstall}ms remaining)`);
@@ -179,37 +170,29 @@ const DHCP = () => {
       lastDHCPInstallTimeRef.current = now;
     }
     
-    // Check if a command is already in progress
     if (commandInProgressRef.current) {
       console.log(`DHCP: Command ${command} is already in progress, queueing...`);
       pendingCommandsRef.current.push({ command, payload });
       return;
     }
     
-    // Mark command as in progress
     commandInProgressRef.current = true;
     
     console.log(`DHCP: SENDING COMMAND: ${command}`, payload ? 'with payload' : 'no payload');
     
-    // Send the command
     sendCommand(command, payload);
     
-    // Set a timeout to clear the in-progress flag
     setTimeout(() => {
       commandInProgressRef.current = false;
       
-      // Process any pending commands
       if (pendingCommandsRef.current.length > 0) {
         const nextCommand = pendingCommandsRef.current.shift();
         console.log(`DHCP: Processing queued command: ${nextCommand.command}`);
         sendCommandWithFlow(nextCommand.command, nextCommand.payload);
       }
-    }, 500); // Small delay to prevent rapid-fire commands
+    }, 500); 
   }, [sendCommand]);
 
-  /**
-   * Process the next command in the queue
-   */
   const processNextCommand = useCallback(() => {
     if (pendingCommandsRef.current.length > 0 && !commandInProgressRef.current) {
       const nextCommand = pendingCommandsRef.current.shift();
@@ -217,8 +200,6 @@ const DHCP = () => {
       sendCommandWithFlow(nextCommand.command, nextCommand.payload);
     }
   }, [sendCommandWithFlow]);
-
-  // ============ UTILITY FUNCTIONS ============
 
   const getTotalScopesCount = () => {
     return Object.keys(scopes).length;
@@ -272,17 +253,14 @@ const DHCP = () => {
     return responseData;
   };
 
-  // ============ MACHINE MANAGEMENT ============
-
-  const getWindowsInfoForMachine = (machine) => {
+  const getServerInfoForMachine = (machine) => {
     if (!machine) {
-      console.error('DHCP: No machine provided to getWindowsInfoForMachine');
+      console.error('DHCP: No machine provided to getServerInfoForMachine');
       return null;
     }
     
-    console.log(`DHCP: Getting Windows info for machine: ${machine.name || 'Unknown'} (${machine.ip})`);
+    console.log(`DHCP: Getting server info for machine: ${machine.name || 'Unknown'} (${machine.ip})`);
     
-    // Check for password in different possible fields
     const password = machine.password || machine.password_provided || '';
     
     console.log(`DHCP: Password for machine ${machine.name || machine.ip}:`, password ? '***HIDDEN***' : 'NOT FOUND');
@@ -296,7 +274,9 @@ const DHCP = () => {
     return {
       ip: machine.ip,
       username: machine.username || machine.username_provided || 'admin',
-      password: password
+      password: password,
+      os_type: machine.os_type || '',
+      sub_os_type: machine.sub_os_type || ''
     };
   };
 
@@ -329,7 +309,6 @@ const DHCP = () => {
       if (!response.ok) {
         console.log('DHCP: Endpoint with password parameter failed, trying without parameter...');
         
-        // Try without parameter
         const response2 = await fetch(`${API_BASE_URL}/api/machines/get-machines`, {
           method: 'GET',
           headers: {
@@ -359,7 +338,6 @@ const DHCP = () => {
         setMachinesLoading(false);
       }
       
-      // Fallback to WebSocket only if component is still mounted
       if (mountedRef.current && isConnected) {
         console.log('DHCP: Falling back to WebSocket for get_machine_info');
         sendCommandWithFlow('get_machine_info', {});
@@ -367,7 +345,6 @@ const DHCP = () => {
     }
     
     async function processMachineData(data) {
-      // Process the data - adjust based on your API response structure
       let machines = [];
       if (data.machines && Array.isArray(data.machines)) {
         machines = data.machines;
@@ -379,7 +356,6 @@ const DHCP = () => {
       
       console.log('DHCP: Total machines found:', machines.length);
       
-      // Filter for DHCP machines
       const dhcpMachinesList = machines.filter(machine => {
         const hasMarks = machine.marked_as && 
                        Array.isArray(machine.marked_as) && 
@@ -390,6 +366,8 @@ const DHCP = () => {
             id: machine.id,
             hasPassword: !!(machine.password || machine.password_provided),
             hasUsername: !!(machine.username || machine.username_provided),
+            os_type: machine.os_type,
+            sub_os_type: machine.sub_os_type,
             marks: machine.marked_as
           });
         }
@@ -409,7 +387,6 @@ const DHCP = () => {
         return;
       }
       
-      // Check if passwords are available
       const machinesWithPasswords = dhcpMachinesList.filter(machine => {
         const hasPassword = machine.password || machine.password_provided;
         if (!hasPassword) {
@@ -432,7 +409,6 @@ const DHCP = () => {
       dhcpMachinesRef.current = dhcpMachinesList;
       setMachinesLoading(false);
       
-      // Check DHCP status on these machines (using command flow)
       checkDHCPOnMachine();
     }
   }, [API_BASE_URL, isConnected, sendCommandWithFlow]);
@@ -452,21 +428,19 @@ const DHCP = () => {
       return null;
     }
     
-    const windowsInfo = getWindowsInfoForMachine(machine);
-    if (!windowsInfo) {
-      console.error('DHCP: Failed to get Windows info for DHCP machine:', machine.name);
+    const serverInfo = getServerInfoForMachine(machine);
+    if (!serverInfo) {
+      console.error('DHCP: Failed to get server info for DHCP machine:', machine.name);
       return null;
     }
     
     console.log(`DHCP: Creating payload for DHCP machine:`, machine.name);
     
     return {
-      windows_info: windowsInfo,
+      server_info: serverInfo,
       ...additionalData
     };
   };
-
-  // ============ WEB SOCKET MESSAGE HANDLER ============
 
   const handleWebSocketMessage = useCallback((message) => {
     console.log('DHCP received WebSocket message:', message);
@@ -523,7 +497,6 @@ const DHCP = () => {
     switch(command) {
       case 'get_machine_info':
         console.log('DHCP: Received machine info via WebSocket fallback');
-        // Process machine info from WebSocket fallback
         if (responseData && responseData.machines && Array.isArray(responseData.machines)) {
           const dhcpMachinesList = responseData.machines.filter(machine => {
             return machine.marked_as && Array.isArray(machine.marked_as) && 
@@ -551,7 +524,7 @@ const DHCP = () => {
         processNextCommand();
         break;
         
-      case 'check_dhcp_role_installed_windows_ansible':
+      case 'check_dhcp_role_installed_server_ansible':
         console.log('Received response for DHCP check:', responseData);
         
         let isInstalled = false;
@@ -596,7 +569,7 @@ const DHCP = () => {
           setShowInstallModal(false);
           const payload = createPayload();
           if (payload) {
-            sendCommandWithFlow('get_dhcp_details_windows_ansible', payload);
+            sendCommandWithFlow('get_dhcp_details_server_ansible', payload);
             startAutoRefresh();
           }
         } else {
@@ -608,7 +581,7 @@ const DHCP = () => {
         processNextCommand();
         break;
         
-      case 'get_dhcp_details_windows_ansible':
+      case 'get_dhcp_details_server_ansible':
         console.log('Received DHCP details response:', responseData);
         
         let dhcpDetails = responseData;
@@ -638,7 +611,7 @@ const DHCP = () => {
         processNextCommand();
         break;
         
-      case 'install_dhcp_role_windows_ansible':
+      case 'install_dhcp_role_server_ansible':
         console.log('DHCP installation response:', responseData);
         
         let installationSuccess = false;
@@ -668,7 +641,7 @@ const DHCP = () => {
             console.log('Sending check command after installation...');
             const payload = createPayload();
             if (payload) {
-              sendCommandWithFlow('check_dhcp_role_installed_windows_ansible', payload);
+              sendCommandWithFlow('check_dhcp_role_installed_server_ansible', payload);
             }
           }, 2000);
         } else {
@@ -683,7 +656,7 @@ const DHCP = () => {
         processNextCommand();
         break;
         
-      case 'configure_dhcp_scope_windows_ansible':
+      case 'configure_dhcp_scope_server_ansible':
         console.log('DHCP scope configuration response:', responseData);
         
         let scopeConfigured = false;
@@ -717,7 +690,7 @@ const DHCP = () => {
             setTimeout(() => {
             const payload = createPayload();
             if (payload) {
-              sendCommandWithFlow('get_dhcp_details_windows_ansible', payload);
+              sendCommandWithFlow('get_dhcp_details_server_ansible', payload);
             }
           }, 1000);
         }, 500);
@@ -745,13 +718,10 @@ const DHCP = () => {
     
   }, [updateInstallationStatus, INSTALLATION_STATUS, sendCommandWithFlow, processNextCommand]);
 
-  // ============ USE EFFECTS ============
-
   useEffect(() => {
     console.log('DHCP Component Mounted');
     mountedRef.current = true;
     
-    // Fetch machines immediately on mount
     fetchMachineInfo();
     
     return () => {
@@ -790,8 +760,6 @@ const DHCP = () => {
     }
   }, [dhcpMachines, machinesLoading]);
 
-  // ============ DHCP OPERATIONS ============
-
   const checkDHCPOnMachine = () => {
     const machine = getMachineByType();
     if (!machine) {
@@ -814,8 +782,8 @@ const DHCP = () => {
       return;
     }
     
-    console.log('SENDING COMMAND: check_dhcp_role_installed_windows_ansible');
-    sendCommandWithFlow('check_dhcp_role_installed_windows_ansible', payload);
+    console.log('SENDING COMMAND: check_dhcp_role_installed_server_ansible');
+    sendCommandWithFlow('check_dhcp_role_installed_server_ansible', payload);
   };
 
   const startAutoRefresh = () => {
@@ -829,7 +797,7 @@ const DHCP = () => {
         lastRefreshTimeRef.current = new Date();
         const payload = createPayload();
         if (payload) {
-          sendCommandWithFlow('get_dhcp_details_windows_ansible', payload);
+          sendCommandWithFlow('get_dhcp_details_server_ansible', payload);
         }
       }
     }, 30000);
@@ -857,8 +825,8 @@ const DHCP = () => {
     
     const payload = createPayload();
     if (payload) {
-      console.log('SENDING COMMAND: get_dhcp_details_windows_ansible');
-      sendCommandWithFlow('get_dhcp_details_windows_ansible', payload);
+      console.log('SENDING COMMAND: get_dhcp_details_server_ansible');
+      sendCommandWithFlow('get_dhcp_details_server_ansible', payload);
     }
   };
 
@@ -1031,7 +999,7 @@ const DHCP = () => {
     setLoading(true);
     setError(null);
     
-    sendCommandWithFlow('configure_dhcp_scope_windows_ansible', payload);
+    sendCommandWithFlow('configure_dhcp_scope_server_ansible', payload);
   };
 
   const checkDHCPInstallation = () => {
@@ -1043,8 +1011,8 @@ const DHCP = () => {
     console.log('Checking DHCP installation...');
     const payload = createPayload();
     if (payload) {
-      console.log('SENDING COMMAND: check_dhcp_role_installed_windows_ansible');
-      sendCommandWithFlow('check_dhcp_role_installed_windows_ansible', payload);
+      console.log('SENDING COMMAND: check_dhcp_role_installed_server_ansible');
+      sendCommandWithFlow('check_dhcp_role_installed_server_ansible', payload);
     }
   };
 
@@ -1068,7 +1036,7 @@ const DHCP = () => {
     
     updateInstallationStatus('dhcp', INSTALLATION_STATUS.INSTALLING, 0, 'Starting DHCP installation...');
     
-    sendCommandWithFlow('install_dhcp_role_windows_ansible', payload);
+    sendCommandWithFlow('install_dhcp_role_server_ansible', payload);
   };
 
   const checkDHCPAgain = () => {
@@ -1287,7 +1255,7 @@ const DHCP = () => {
               <div>
                 <p className="note-title">Important Information:</p>
                 <ul>
-                  <li>This will install Windows DHCP Server role via Ansible</li>
+                  <li>This will install DHCP Server role via Ansible</li>
                   <li>System restart may be required</li>
                   <li>Ensure you have administrator privileges</li>
                   <li>Installation may take several minutes</li>
