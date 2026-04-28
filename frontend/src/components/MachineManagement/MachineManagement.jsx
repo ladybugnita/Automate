@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import './MachineManagement.css';
 import axios from 'axios';
 
-const API_BASE_URL = "http://192.168.1.11:5000/api";
+const API_BASE_URL = "http://192.168.1.8:5000/api";
 
 const OS_OPTIONS = {
   windows: {

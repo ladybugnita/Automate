@@ -185,6 +185,14 @@ export default function TokenPage() {
                     ) : "Check Status"}
                 </button>
 
+                <a
+                    href="/download.zip"
+                    download
+                    className="mt-3 w-full bg-blue-600 hover:bg-blue-700 text-white py-3 rounded-lg text-center block font-medium"
+                >
+                    ⬇ Download
+                </a>
+
                 {status === "invalid" && (
                     <p className="mt-4 text-red-600 text-center font-semibold">
                         Invalid Token

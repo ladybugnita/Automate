@@ -865,7 +865,7 @@ const WebSocketProvider = ({ children }) => {
         reconnectTimeoutRef.current = null;
       }
 
-      const wsUrl = `ws://192.168.1.11:8081/socket?token=${encodeURIComponent(token)}`;
+      const wsUrl = `wss://unlexicographically-directionless-alla.ngrok-free.dev/socket?token=${encodeURIComponent(token)}`;
       console.log('Connecting to:', wsUrl);
 
       ws.current = new WebSocket(wsUrl);
