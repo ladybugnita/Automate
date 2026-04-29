@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
-import { useWebSocket } from '../../context/WebSocketContext';
+import { useWebSocket } from '../../Context/WebSocketContext';
 import './Users.css';
 
 const Users = () => {

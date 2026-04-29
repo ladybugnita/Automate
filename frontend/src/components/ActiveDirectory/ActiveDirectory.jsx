@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { useWebSocket } from '../../context/WebSocketContext';
+import { useWebSocket } from '../../Context/WebSocketContext';
 import './ActiveDirectory.css';
 
 const ActiveDirectory = () => {

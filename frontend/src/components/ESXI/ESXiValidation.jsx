@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useWebSocket } from '../../context/WebSocketContext'; 
+import { useWebSocket } from '../../Context/WebSocketContext'; 
 import { useNavigate } from 'react-router-dom';
 
 function ESXiValidation({ onSuccess, initialData = {} }) {

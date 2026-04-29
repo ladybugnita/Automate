@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { useWebSocket } from '../../context/WebSocketContext';
+import { useWebSocket } from '../../Context/WebSocketContext';
 import ESXiValidation from './ESXiValidation';
-import './ESXI.css';
+import './ESXi.css';
 
 const ESXI = () => {
   const { 

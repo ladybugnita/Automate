@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import './ResourceMonitor.css';
-import { useWebSocket } from '../../context/WebSocketContext';
+import { useWebSocket } from '../../Context/WebSocketContext';
 
 function ResourceMonitor() {
   const { sendCommand, isConnected, addListener } = useWebSocket();

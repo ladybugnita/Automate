@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { useWebSocket } from '../../context/WebSocketContext';
-import './DHCP.css';
+import { useWebSocket } from '../../Context/WebSocketContext';
+import './dhcp.css';
 
 const AddressLeasesTable = ({ leases }) => {
   if (!leases || Object.keys(leases).length === 0) {

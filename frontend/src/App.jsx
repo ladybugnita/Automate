@@ -11,7 +11,7 @@ import Layout from "./components/Layout/Layout";
 import ResourceMonitor from "./components/ResourceMonitor/ResourceMonitor";
 import DNSConfiguration from "./components/DNSConfiguration/DNSConfiguration";
 import Routing from "./components/Routing/Routing";
-import DHCP from "./components/DHCP/DHCP";
+import DHCP from "./components/DHCP/dhcp";
 import ActiveDirectory from "./components/ActiveDirectory/ActiveDirectory";
 import MachineManagement from "./components/MachineManagement/MachineManagement";
 import Switch from "./components/Switch/Switch";

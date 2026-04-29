@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { useWebSocket } from '../../context/WebSocketContext';
+import { useWebSocket } from '../../Context/WebSocketContext';
 import './DNSConfiguration.css';
 
 function DNSConfiguration() {
